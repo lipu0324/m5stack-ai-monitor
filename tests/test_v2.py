@@ -19,6 +19,18 @@ from collectors import HermesCollector
 class V2Tests(unittest.TestCase):
     def test_usage_projection_keeps_tokens_not_transcripts(self):
         self.assertEqual(project({'latestTokenUsageInfo':{'total':{'inputTokens':50}},'turns':['private']}),{'latestTokenUsageInfo':{'total':{'inputTokens':50}}})
+    def test_nullable_token_states_keep_snapshot_usable(self):
+        with tempfile.TemporaryDirectory() as d:
+            m=Monitor(dict(codex_home=d,hermes_home=d,state_dir=d,events_dir=d))
+            states={'a':{'state':{'latestTokenUsageInfo':None}},'b':{'state':None},'c':None,
+                    'd':{'state':{'latestTokenUsageInfo':{'total':None}}},
+                    'e':{'state':{'latestTokenUsageInfo':{'total':{'inputTokens':'invalid'}}}},
+                    'valid':{'state':{'latestTokenUsageInfo':{'total':{'inputTokens':100,'outputTokens':20,'cachedInputTokens':75}}}}}
+            m.ipc.snapshot=Mock(return_value=(True,'',states))
+            result=m.snapshot()['metrics']['codex']
+            self.assertEqual(result['input'],100);self.assertEqual(result['output'],20);self.assertEqual(result['hit_percent'],75)
+            m.ipc.snapshot=Mock(return_value=(True,'',{'a':states['a']}))
+            self.assertFalse(m.snapshot()['metrics']['codex']['available'])
     def test_quota_remaining_not_used_and_unknown_window(self):
         self.assertEqual(quota_projection({'rateLimits':{'primary':{'usedPercent':20,'windowDurationMins':10080,'resetsAt':123}}})[0]['remaining_percent'],80)
         self.assertEqual(quota_projection({'rateLimits':{'primary':None}}),[])

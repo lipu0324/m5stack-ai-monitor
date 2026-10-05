@@ -11,6 +11,7 @@
 #include "navigation.h"
 #include "response_reader.h"
 #include "agents.h"
+#include "link_recovery.h"
 
 // Only the network worker touches HTTP; only loop() touches display, NVS and buttons.
 enum Status : uint8_t { IDLE, RUNNING, APPROVAL, WAIT_INPUT, DONE, FAILED, INTERRUPTED, UNKNOWN };
@@ -92,6 +93,8 @@ int beepsRemaining=0; uint32_t nextBeep=0;
 uint32_t networkStackFree=0;
 uint32_t snapshotReads=0,hostReads=0,snapshotReadErrors=0,hostReadErrors=0;
 uint32_t bodyExpected=0,bodyReceived=0;
+int snapshotHttpCode=0,hostHttpCode=0;
+LinkRecovery linkRecovery;
 String pendingApprovalId, pendingApprovalChoice, controlResult, controlToast;
 uint32_t controlToastUntil=0;
 bool controlPending=false;
@@ -167,7 +170,8 @@ bool readHttpJson(HTTPClient& http,WiFiClient& client,String& error,bool hostBod
   return false;
 }
 
-bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,String& error,bool includeHost,uint16_t hidden) {
+bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,String& error,bool includeHost,uint16_t hidden,bool& transportFault) {
+  transportFault=false;
   WiFiClient client;
   HTTPClient http;
   String base=cfg.url;
@@ -179,7 +183,7 @@ bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,Strin
     if(!mdnsReady) mdnsReady=MDNS.begin("ai-monitor-"+String((uint32_t)ESP.getEfuseMac(),HEX));
     IPAddress address;
     if(mdnsReady) address=MDNS.queryHost(host.substring(0,host.length()-6),1500);
-    if(!address) {error="服务域名未找到，请使用 IP";return false;}
+    if(!address) {error="服务域名未找到，请使用 IP";transportFault=true;return false;}
     base="http://"+address.toString()+base.substring(hostEnd);
   }
   String url=base+"/api/v1/snapshot?view=active&source="+(source==1?"codex":source==2?"hermes":"all");
@@ -190,12 +194,12 @@ bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,Strin
   http.setReuse(false);http.setConnectTimeout(2000); http.setTimeout(2500);
   if(!http.begin(client,url)) {error="服务地址无效";return false;}
   http.addHeader("Authorization","Bearer "+cfg.token);
-  int code=http.GET();
+  int code=http.GET();lock();snapshotHttpCode=code;unlock();
   if(code!=200) {
-    error=code==401?"认证失败：检查 Token":code<0?"服务不可达":"服务错误 "+String(code);
-    http.end();return false;
+    error=code==401?"认证失败：检查 Token":code<0?"服务不可达 ("+String(code)+")":"服务错误 "+String(code);
+    transportFault=code<0;http.end();return false;
   }
-  if(!readHttpJson(http,client,error,false)) return false;
+  if(!readHttpJson(http,client,error,false)) {transportFault=error.startsWith("响应不完整");return false;}
   auto& doc=networkJson;
   if(doc["version"].as<int>()!=1 || !doc["tasks"].is<JsonArray>() || !doc["events"].is<JsonArray>() || !doc["sources"].is<JsonObject>()) {
     error="数据格式不兼容";return false;
@@ -246,7 +250,7 @@ bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,Strin
   if(!includeHost) return true;
   if(!http.begin(client,base+"/api/v1/host")) return true;
   http.addHeader("Authorization","Bearer "+cfg.token);
-  code=http.GET();
+  code=http.GET();lock();hostHttpCode=code;unlock();
   if(code==404) {
     out.host.received=millis();copyText(out.host.detail,"请更新本机监视服务");http.end();return true;
   }
@@ -317,7 +321,9 @@ void networkWorker(void*) {
       } else result="审批服务地址无效";
       lock();controlResult=result;unlock();
     }
-    bool ok=fetch(working,0,cursor,*next,error,includeHost,hidden);
+    bool transportFault=false;
+    bool ok=fetch(working,0,cursor,*next,error,includeHost,hidden,transportFault);
+    lock();bool rejoin=!testing && linkRecovery.observe(transportFault,ok,millis());unlock();
     lock();networkStackFree=uxTaskGetStackHighWaterMark(nullptr);unlock();
     if(ok) {
       lock();if(hidden!=agentSelection.hidden || cursor!=requestedCursor[0]) {unlock();retryAt=millis();continue;}if(!next->host.received) next->host=cache[0].host;cache[0]=*next;
@@ -327,6 +333,11 @@ void networkWorker(void*) {
     } else {
       setMessage(error);retryAt=millis()+backoff;backoff=min(backoff*2,30000U);
       if(testing) {candidateError=error;testing=false;WiFi.disconnect(false);retryAt=millis()+3000;}
+      else if(rejoin) {
+        // Keep saved pairing and cached data; reconnect the STA rather than rebooting.
+        WiFi.disconnect(false,false);trying=false;retryAt=millis()+1000;
+        setMessage(error+"，重连 Wi-Fi");
+      }
     }
     vTaskDelay(pdMS_TO_TICKS(100));
   }
@@ -486,6 +497,9 @@ void serialDiagnostics() {
     if(line=="INFO") {
       lock();String message=netMessage;uint32_t received=cache[0].received;int total=cache[0].total;uint32_t stackFree=networkStackFree;unlock();
       Serial.printf("INFO {\"uptime\":%lu,\"heap\":%u,\"min_heap\":%u,\"max_heap_block\":%u,\"network_stack_free\":%lu,\"wifi\":%d,\"ap\":%s,\"page\":%d,\"tasks\":%d,\"visible_tasks\":%d,\"events\":%d,\"host_samples\":%d,\"host_available\":%s,\"host_age_ms\":%lu,\"age_ms\":%lu,\"message\":\"%s\"}\n",millis()/1000,ESP.getFreeHeap(),ESP.getMinFreeHeap(),ESP.getMaxAllocHeap(),stackFree,WiFi.status(),apActive?"true":"false",page,total,view.count,view.eventCount,view.host.count,view.host.available?"true":"false",view.host.received?millis()-view.host.received:0,received?millis()-received:0,message.c_str());
+    } else if(line=="NET_INFO") {
+      lock();int sc=snapshotHttpCode,hc=hostHttpCode;uint32_t rejoins=linkRecovery.rejoins;int failures=linkRecovery.failures;unlock();
+      Serial.printf("NET {\"wifi\":%d,\"ip\":\"%s\",\"gateway\":\"%s\",\"rssi\":%d,\"snapshot_http\":%d,\"host_http\":%d,\"transport_failures\":%d,\"wifi_rejoins\":%lu}\n",WiFi.status(),WiFi.localIP().toString().c_str(),WiFi.gatewayIP().toString().c_str(),WiFi.RSSI(),sc,hc,failures,rejoins);
     } else if(line=="HTTP_DIAG") {
       lock();uint32_t sr=snapshotReads,hr=hostReads,se=snapshotReadErrors,he=hostReadErrors,expected=bodyExpected,received=bodyReceived;unlock();
       Serial.printf("HTTP {\"snapshot_reads\":%lu,\"host_reads\":%lu,\"snapshot_errors\":%lu,\"host_errors\":%lu,\"expected\":%lu,\"received\":%lu,\"json_capacity\":%u}\n",sr,hr,se,he,expected,received,networkJson.capacity());
@@ -533,7 +547,7 @@ void setup() {
   brightness=prefs.getUChar("brightness",128);muted=prefs.getBool("muted",false);
   M5.Display.setBrightness(brightness);M5.Speaker.setVolume(32);
   guard=xSemaphoreCreateMutex();readConfig(activeConfig);
-  WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(false);
+  WiFi.mode(WIFI_STA);WiFi.setSleep(false);WiFi.setAutoReconnect(false);
   if(!activeConfig.ssid.length()) startPortal();
   xTaskCreatePinnedToCore(networkWorker,"monitor-network",8192,nullptr,1,nullptr,0);
   lastButton=millis();render();

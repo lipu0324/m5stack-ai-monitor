@@ -107,8 +107,14 @@ class Monitor:
         connected,_,states=self.ipc.snapshot()
         inputs=output=cached=0
         for entry in states.values():
-            total=entry.get('state',{}).get('latestTokenUsageInfo',{}).get('total',{})
-            inputs+=int(total.get('inputTokens') or 0);output+=int(total.get('outputTokens') or 0);cached+=int(total.get('cachedInputTokens') or 0)
+            state=entry.get('state') if isinstance(entry,dict) else None
+            usage=state.get('latestTokenUsageInfo') if isinstance(state,dict) else None
+            total=usage.get('total') if isinstance(usage,dict) else None
+            if not isinstance(total,dict):continue
+            try:
+                i,o,c=(max(0,int(total.get(key) or 0)) for key in ('inputTokens','outputTokens','cachedInputTokens'))
+            except (TypeError,ValueError):continue
+            inputs+=i;output+=o;cached+=c
         codex={'available':connected and inputs>0,'input':inputs,'output':output,'cached':cached,'total':inputs+output,
                'hit_percent':100*cached/inputs if inputs else None,'scope':'已加载桌面会话累计；每日为账户统计'}
         codex.update(self.account_usage.snapshot())

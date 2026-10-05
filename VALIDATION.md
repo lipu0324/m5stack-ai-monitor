@@ -6,14 +6,17 @@
 |---|---|
 | 原固件备份 | 完整 4,194,304 字节，SHA-256 与可读检查通过；未执行回写恢复 |
 | 配网备份 | 升级前 NVS 20,480 字节备份并验证；备份含私有配置，未公开 |
-| 后端与导航测试 | 52 项通过，包括认证、分页、事件、缓存分母、现有 Hermes 会话合并、过期审批和精确请求响应、Codex typed delivery receipt、日统计超时不影响额度、五页导航、异步提问、主机差分统计/首次未知/计数重置/网卡切换/采集失败恢复/历史上限，OpenCode v1/v2 状态投影、明确新结果/断线/重连、位置作用域查询、来源过滤/认证/分页、进程精确匹配/监听归属、设备来源选择，以及原生 C++ 接收器的 UTF-8/短读/断开/尾部校验/超时；见 `tools/v5-tests.log` |
+| 后端与导航测试 | 54 项通过，包括认证、分页、事件、缓存分母、现有 Hermes 会话合并、过期审批和精确请求响应、Codex typed delivery receipt、日统计超时不影响额度、五页导航、异步提问、主机差分统计/首次未知/计数重置/网卡切换/采集失败恢复/历史上限，OpenCode v1/v2 状态投影、明确新结果/断线/重连、位置作用域查询、来源过滤/认证/分页、进程精确匹配/监听归属、设备来源选择、传输失败重连冷却/millis 回绕、nullable Token 状态不影响快照，以及原生 C++ 接收器的 UTF-8/短读/断开/尾部校验/超时；见 `tools/link-recovery-tests.log` |
 | Codex 状态 | 当前 Desktop IPC 快照、实时 patches、断开后新快照已验证；脱敏记录在 `tests/fixtures/codex-live-probe.json`；当前已加载 9 个根聊天 |
 | Codex 用量 | 账户七日 Token 与真实套餐窗口读取成功；本地会话 input/cache/output 投影正常 |
 | Hermes 数据 | 读取现有 state.db 的 18 个主会话；当前 Desktop WebSocket 返回实时列表及待响应请求；Gateway 在线且当前 active_agents=0；实屏累计用量与约 95.4% 缓存命中显示正常 |
 | Hermes 插件 | 安装、Gateway 热加载、heartbeat 与 Plugin Doctor 校验通过；异步钩子故障隔离、审批响应与结束等事件用测试验证；未额外调用模型或发送任务 |
 | 服务 | systemd 用户服务运行于 8766；有效 Token 获取成功，错误 Token 返回 401；mDNS 发布成功 |
-| 固件大小 | 当前镜像 1,685,888 字节，在 3MB 程序分区内；静态 RAM 106,464 字节 |
-| 栈修复 | 消除原 13,296 字节 Snapshot 临时对象；实际机器码 fetch/readHttpJson/resetSnapshot/networkWorker 栈帧为 800/144/32/496 字节，网络任务栈 8,192 字节 |
+| 固件大小 | 当前镜像 1,687,808 字节，在 3MB 程序分区内；静态 RAM 106,488 字节 |
+| 栈修复 | 消除原 13,296 字节 Snapshot 临时对象；实际机器码 fetch/readHttpJson/resetSnapshot/networkWorker 栈帧为 816/144/32/496 字节，网络任务栈 8,192 字节 |
+| 持续服务不可达排查 | 服务在线且本机认证 HTTP 200、LAN 地址未变化；重启前设备 ARP 无响应，串口连接触发重启后恢复，11 次完整请求正常。原始链路故障未保留下来，不断言唯一根因 |
+| 连接自恢复实机短测 | 新固件关闭 modem sleep；连续三次传输失败重连 STA，每分钟最多一次。只停止监视服务，实际 HTTP -1 与失败次数 1→2→重连一次已观察；服务恢复后 uptime 连续 9→23 秒、AI/主机 HTTP 200、快照/主机年龄 377/329ms，设置进出响应正常，无设备重启；见 `tools/link-recovery-device-review.log` |
+| Codex 空用量保护 | 历史日志存在 nullable latestTokenUsageInfo 触发 HTTP handler 异常；对 entry/state/usage/total 与非法数字做防护，缺失用量仍返回任务快照，回归通过 |
 | 服务断开/恢复 | 实机关闭监视服务后约一秒提示不可达；保留最后任务、超过十秒标记数据过期；重启服务后在退避周期内自动同步；设备 uptime 从 9 增至 95 秒，无重启；见 `tools/v3-connection-review.log` |
 | 串口看门狗修复 | 抓取 LCD 时，Arduino 2.0.16 网络日志在 UART TX 持续忙时自旋，导致 IDLE0 watchdog。关闭 SDK 调试串口输出并禁用其 TX-idle 等待后，服务不可达期间连续两次完整截图及恢复验证通过；INFO 与屏幕错误提示保留 |
 | 运行余量 | v4 主机页实机空闲堆稳定 61,588 字节，最低 44,512 字节，最大连续空闲块 38,900 字节，网络栈余量 5,508 字节；主机资源/网络整帧绘制约 55/59ms |

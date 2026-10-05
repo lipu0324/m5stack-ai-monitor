@@ -89,7 +89,7 @@ Hermes 桌面连接只读取其本地桥接 Token，保留在主机内存中，�
 .venv/bin/python tools/device.py screen --output .private/device-screen.ppm
 ```
 
-USB 只读界面诊断支持 `TAB 0..4`、`SETTINGS`、`BACK`、`NEXT_SETTING`、`SELECT_BACK`、`DETAIL`、`METRIC`、`MODE`、`HOST_MODE`、`HTTP_DIAG`、`AGENTS` 和 `PERF`，不触发审批决定。`PERF` 返回实际整帧绘制时间与分块缓冲启用情况。
+USB 只读界面诊断支持 `TAB 0..4`、`SETTINGS`、`BACK`、`NEXT_SETTING`、`SELECT_BACK`、`DETAIL`、`METRIC`、`MODE`、`HOST_MODE`、`HTTP_DIAG`、`NET_INFO`、`AGENTS` 和 `PERF`，不触发审批决定。`PERF` 返回实际整帧绘制时间与分块缓冲启用情况。
 
 SDK 调试日志已关闭，避免 Arduino 2.0.16 在长串口截图期间遇到网络错误时忙等 TX-idle 并触发看门狗；连接错误仍通过屏幕和 INFO 报告。
 
@@ -128,3 +128,12 @@ OpenCode 累计输入 = 非缓存输入 + 缓存读取 + 缓存写入；命中�
 USB `AGENTS` 仅显示已发现 ID、选择和隐藏位掩码；`SOURCE_NEXT`/`SOURCE_TOGGLE` 操作与物理按钮相同的状态机，会保存设备显示偏好，不改变 AI 任务。可用 `tools/review-agents-ui.py` 短测并恢复原选择。
 
 接口语义参考 [OpenCode v2 活动会话](https://dev.opencode.ai/v2/docs/api/session/v2-session-active/)、[会话列表与 Token 字段](https://dev.opencode.ai/v2/docs/api/session/v2-session-list/)、[审批列表](https://dev.opencode.ai/v2/docs/api/permission/v2-permission-request-list/)；实际接入以本机 API 与 schema 验证为准。
+
+
+## Wi-Fi 已连接但服务不可达
+
+HTTP 连接错误在屏幕显示具体负数错误码。`NET_INFO` 仅返回设备 IP、网关、RSSI、最近 AI/主机 HTTP 状态码、连续传输失败次数与自动 Wi-Fi 重连次数，不包含 SSID、密码或 Token。
+
+固件关闭 Wi-Fi modem sleep，持续轮询时优先保持连接。主快照连续三次 TCP/正文传输失败或 mDNS 解析失败，重新接入已保存 Wi-Fi；重连最短间隔一分钟，避免服务器关闭时反复复位无线连接。重连保留配置与最后快照，不重启设备。HTTP 401、服务器 4xx/5xx 或 JSON 格式错误保持对应提示，不触发该恢复；主机图表请求单独失败不会破坏有效 AI 快照。
+
+`tools/check-link-recovery.py` 会短暂关闭**本机监视服务**，验证传输错误、Wi-Fi 自动重连、设置进出以及服务重启后同步；通过 finally 确保服务恢复。不停止 Codex/Hermes/OpenCode，也不发送任务。仅供手动短测。
