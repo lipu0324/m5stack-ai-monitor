@@ -1,0 +1,6 @@
+{
+  "snapshot": true,
+  "patches": true,
+  "reconnect": true,
+  "status": "running"
+}

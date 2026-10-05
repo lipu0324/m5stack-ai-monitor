@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="560" viewBox="0 0 1120 560" role="img" aria-labelledby="title desc">
+  <title id="title">M5Stack AI Monitor</title>
+  <desc id="desc">A pocket command center for Codex and Hermes. Illustrated screen uses fictional demo tasks and metrics.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#09121f"/><stop offset="1" stop-color="#152637"/></linearGradient>
+    <linearGradient id="accent"><stop stop-color="#36ddf6"/><stop offset="1" stop-color="#43e4a5"/></linearGradient>
+    <radialGradient id="glow"><stop stop-color="#35d3df" stop-opacity=".16"/><stop offset="1" stop-color="#35d3df" stop-opacity="0"/></radialGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#83acbd" stroke-opacity=".07"/></pattern>
+  </defs>
+  <rect width="1120" height="560" rx="26" fill="url(#bg)"/>
+  <rect width="1120" height="560" rx="26" fill="url(#grid)"/>
+  <ellipse cx="830" cy="270" rx="320" ry="300" fill="url(#glow)"/>
+  <g font-family="Inter,Segoe UI,Arial,sans-serif">
+    <rect x="56" y="62" width="220" height="30" rx="15" fill="#142d37" stroke="#284b55"/>
+    <circle cx="75" cy="77" r="4" fill="#43e4a5"/>
+    <text x="89" y="82" fill="#a0e7df" font-size="11" letter-spacing="2">YOUR AGENTS. IN VIEW.</text>
+    <text x="56" y="168" fill="#eff7fc" font-size="66" font-weight="800" letter-spacing="-3">M5Stack</text>
+    <text x="56" y="240" fill="url(#accent)" font-size="66" font-weight="800" letter-spacing="-3">AI Monitor</text>
+    <text x="58" y="294" fill="#adc2d3" font-size="21">A tiny screen for your big AI workflows.</text>
+    <text x="58" y="329" fill="#708ba1" font-size="16">Codex + Hermes · Wi-Fi · Three buttons</text>
+    <g font-size="13" fill="#d5e6ef">
+      <rect x="56" y="368" width="106" height="34" rx="8" fill="#19333f"/><text x="73" y="390">LIVE TASKS</text>
+      <rect x="172" y="368" width="120" height="34" rx="8" fill="#19333f"/><text x="189" y="390">APPROVALS</text>
+      <rect x="302" y="368" width="126" height="34" rx="8" fill="#19333f"/><text x="319" y="390">TOKEN STATS</text>
+    </g>
+    <path d="M58 465H472" stroke="#2d4658"/>
+    <text x="58" y="493" fill="#6f8d9f" font-size="12" letter-spacing="2">ESP32 / 4MB FLASH / 320 × 240 / RGB565</text>
+    <g transform="translate(642 72)">
+      <rect x="8" y="18" width="362" height="414" rx="40" fill="#02070d" opacity=".5"/>
+      <rect width="354" height="414" rx="35" fill="#26313e" stroke="#4b5b6d" stroke-width="2"/>
+      <rect x="9" y="9" width="336" height="396" rx="29" fill="#101722" stroke="#394555"/>
+      <text x="30" y="38" fill="#a6b5c5" font-size="11" letter-spacing="3">M5STACK</text>
+      <circle cx="324" cy="34" r="4" fill="#39e7ac"/>
+      <rect x="17" y="57" width="320" height="274" rx="8" fill="#08121b"/>
+      <text x="31" y="80" fill="#34d3f3" font-size="12">AI</text><text x="57" y="80" fill="#e8f3fc" font-size="13">RUNNING</text>
+      <text x="260" y="80" fill="#59e4ae" font-size="10">● LIVE</text>
+      <path d="M29 91H325" stroke="#243d4c"/>
+      <rect x="28" y="103" width="298" height="61" rx="8" fill="#152d3b" stroke="#2a778b"/>
+      <rect x="39" y="115" width="23" height="23" rx="5" fill="#194a59"/><text x="46" y="131" fill="#46d6f6" font-size="12">C</text>
+      <text x="72" y="129" fill="#e5f3fa" font-size="13">Build the next great thing</text>
+      <circle cx="77" cy="148" r="3" fill="#43e4a5"/><text x="86" y="152" fill="#86b7b2" font-size="10">Running · tool activity</text>
+      <rect x="28" y="172" width="298" height="61" rx="8" fill="#142431"/>
+      <rect x="39" y="184" width="23" height="23" rx="5" fill="#463425"/><text x="46" y="200" fill="#ffc379" font-size="12">H</text>
+      <text x="72" y="198" fill="#e5f3fa" font-size="13">Review a deployment</text>
+      <circle cx="77" cy="217" r="3" fill="#ffc379"/><text x="86" y="221" fill="#dfb985" font-size="10">Waiting for your decision</text>
+      <rect x="28" y="245" width="298" height="37" rx="7" fill="#102431"/>
+      <text x="39" y="268" fill="#789bb1" font-size="10">CACHE HIT</text><text x="120" y="268" fill="#39d5ef" font-size="15" font-weight="700">92%</text>
+      <rect x="165" y="260" width="145" height="5" rx="2" fill="#294152"/><rect x="165" y="260" width="133" height="5" rx="2" fill="url(#accent)"/>
+      <text x="29" y="309" fill="#789bb1" font-size="10">Synced just now</text><text x="245" y="309" fill="#547c94" font-size="10">DEMO VIEW</text>
+      <g fill="#324152" stroke="#5b6b7e"><rect x="39" y="354" width="58" height="26" rx="7"/><rect x="148" y="354" width="58" height="26" rx="7"/><rect x="257" y="354" width="58" height="26" rx="7"/></g>
+      <g fill="#a5bacb" font-size="11" text-anchor="middle"><text x="68" y="371">A</text><text x="177" y="371">B</text><text x="286" y="371">C</text></g>
+    </g>
+  </g>
+</svg>

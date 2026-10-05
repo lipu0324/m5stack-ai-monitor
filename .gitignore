@@ -1,0 +1,26 @@
+# Generated files and local environments
+.pio/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Private device state, credentials and captured conversations
+.private/
+backups/
+.env
+.env.*
+!.env.example
+pairing.txt
+config.local.json
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.jsonl
+
+# Local diagnostic output and downloaded installer bundle
+tools/*.log
+tools/*.ppm
+tools/*.png
+tools/get-platformio.py

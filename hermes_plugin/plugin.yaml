@@ -1,0 +1,10 @@
+name: m5stack-ai-monitor
+version: "1.0.0"
+description: "Read-only M5Stack status observer; never injects or blocks agent work."
+provides_hooks:
+  - pre_llm_call
+  - post_llm_call
+  - pre_tool_call
+  - pre_approval_request
+  - post_approval_response
+  - on_session_end
