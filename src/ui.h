@@ -5,26 +5,37 @@ constexpr uint16_t rgb(int r,int g,int b) {return ((r>>3)<<11)|((g>>2)<<5)|(b>>3
 constexpr uint16_t UI_BG=rgb(9,17,28), UI_CARD=rgb(20,33,49), UI_SELECTED=rgb(26,48,65);
 constexpr uint16_t UI_TEXT=rgb(237,245,251), UI_DIM=rgb(147,167,187), UI_LINE=rgb(40,58,76);
 constexpr uint16_t UI_CYAN=rgb(63,205,239), UI_GREEN=rgb(74,222,157), UI_AMBER=rgb(255,194,88), UI_RED=rgb(255,108,119);
-constexpr int STRIP_HEIGHT=40;
+// Two DMA strips keep the same 25,600-byte pixel budget as one 40-row strip.
+constexpr int STRIP_HEIGHT=20;
 static_assert(240%STRIP_HEIGHT==0,"LCD strips must cover the display exactly");
 uint32_t stripHashes[240/STRIP_HEIGHT]{};
 lgfx::LGFXBase* gfx=&M5.Display;
 int stripY=0, sceneX=0;
 float sceneProgress=1;
 
+bool visible(int y,int height) {
+  return !canvasReady || (y<stripY+STRIP_HEIGHT && y+height>stripY);
+}
 void box(int x,int y,int w,int h,uint16_t c,int radius=0) {
+  if(!visible(y,h)) return;
   if(radius) gfx->fillRoundRect(x+sceneX,y-stripY,w,h,radius,c);
   else gfx->fillRect(x+sceneX,y-stripY,w,h,c);
 }
 void stroke(int x,int y,int w,int h,uint16_t c,int radius=0) {
+  if(!visible(y,h)) return;
   if(radius) gfx->drawRoundRect(x+sceneX,y-stripY,w,h,radius,c);
   else gfx->drawRect(x+sceneX,y-stripY,w,h,c);
 }
-void segment(int x,int y,int xx,int yy,uint16_t c) {gfx->drawLine(x+sceneX,y-stripY,xx+sceneX,yy-stripY,c);}
+void segment(int x,int y,int xx,int yy,uint16_t c) {
+  if(!visible(min(y,yy),abs(yy-y)+1)) return;
+  gfx->drawLine(x+sceneX,y-stripY,xx+sceneX,yy-stripY,c);
+}
 void dot(int x,int y,int r,uint16_t c,bool fill=true) {
+  if(!visible(y-r,r*2+1)) return;
   if(fill) gfx->fillCircle(x+sceneX,y-stripY,r,c);else gfx->drawCircle(x+sceneX,y-stripY,r,c);
 }
 void label(const String& value,int x,int y,uint16_t c=UI_TEXT,int size=12) {
+  if(!visible(y,size==26?30:size+2)) return;
   if(size==26) gfx->setFont(&fonts::Font4);else if(size==16) gfx->setFont(&fonts::efontCN_16);else gfx->setFont(&fonts::efontCN_12);
   gfx->setTextColor(c);gfx->drawString(value,x+sceneX,y-stripY);
 }
@@ -40,7 +51,11 @@ String fitted(const String& value,int width,int size=12) {
   }
   return result+"…";
 }
+void fittedLabel(const String& value,int x,int y,int width,uint16_t c=UI_TEXT,int size=12) {
+  if(visible(y,size==26?30:size+2)) label(fitted(value,width,size),x,y,c,size);
+}
 void wrap(const String& value,int x,int y,int width,int lines,uint16_t c=UI_DIM,int size=12,int skip=0) {
+  if(!visible(y,lines*(size+2))) return;
   gfx->setFont(size==16?&fonts::efontCN_16:&fonts::efontCN_12);
   String line;int count=0;
   for(size_t i=0;i<value.length();) {
@@ -55,6 +70,7 @@ void wrap(const String& value,int x,int y,int width,int lines,uint16_t c=UI_DIM,
   if(count>=skip && count<lines+skip) label(line,x,y+(count-skip)*(size+2),c,size);
 }
 void pill(const String& value,int x,int y,uint16_t c,int width=42) {
+  if(!visible(y,19)) return;
   box(x,y,width,19,UI_SELECTED,5);label(value,x+6,y+3,c);
 }
 void progress(int x,int y,int width,int height,float fraction,uint16_t c) {
@@ -63,6 +79,7 @@ void progress(int x,int y,int width,int height,float fraction,uint16_t c) {
   if(filled>0) box(x,y,max(height,filled),height,c,height/2);
 }
 void ring(int x,int y,int radius,float fraction,uint16_t c) {
+  if(!visible(y-radius-2,radius*2+5)) return;
   for(int i=0;i<60;i++) {
     float angle=(i*6-90)*PI/180;
     int xx=x+cosf(angle)*radius, yy=y+sinf(angle)*radius;
@@ -75,14 +92,15 @@ void wifiIcon(int x,int y,uint16_t c) {
   segment(x-8,y,x-3,y-3,c);segment(x-3,y-3,x+3,y-3,c);segment(x+3,y-3,x+8,y,c);
 }
 void key(const String& letter,const String& action,int x,int width=98) {
+  if(!visible(225,15)) return;
   box(x,225,16,13,UI_LINE,3);label(letter,x+4,225,UI_TEXT);label(action,x+21,225,UI_DIM);
 }
 void emptyState(const String& title,const String& subtitle,bool ok=true) {
   dot(160,104,30,UI_CARD);ring(160,104,29,1,ok?UI_GREEN:UI_CYAN);
   if(ok) {segment(147,104,157,114,UI_GREEN);segment(157,114,175,93,UI_GREEN);}
   else {dot(151,104,3,UI_CYAN);dot(160,104,3,UI_CYAN);dot(169,104,3,UI_CYAN);}
-  gfx->setFont(&fonts::efontCN_16);label(title,(320-gfx->textWidth(title))/2,147,UI_TEXT,16);
-  gfx->setFont(&fonts::efontCN_12);label(subtitle,(320-gfx->textWidth(subtitle))/2,175,UI_DIM);
+  if(visible(147,18)) {gfx->setFont(&fonts::efontCN_16);label(title,(320-gfx->textWidth(title))/2,147,UI_TEXT,16);}
+  if(visible(175,14)) {gfx->setFont(&fonts::efontCN_12);label(subtitle,(320-gfx->textWidth(subtitle))/2,175,UI_DIM);}
 }
 void taskPage() {
   box(10,41,146,28,UI_CARD,7);dot(22,55,3,UI_CYAN);
@@ -95,17 +113,18 @@ void taskPage() {
     box(10,76,300,125,UI_CARD,9);pill(AgentSelection::label(agent),20,83,accent,90);
     label(labels[t.status],118,86,color(t.status));label(elapsed(t.started),239,86,UI_DIM);
     wrap(t.title,20,111,280,2,UI_TEXT,16);
-    label(fitted(t.action,276),20,154,UI_CYAN);
+    fittedLabel(t.action,20,154,276,UI_CYAN);
     wrap(t.summary,20,174,280,2,UI_DIM);
     return;
   }
   int first=(selection[0]/3)*3;
   for(int i=first;i<min(first+3,view.count);i++) {
     Task& t=view.tasks[i];bool chosen=i==selection[0];int agent=AgentSelection::index(t.source);uint16_t accent=agentColor(agent);int y=76+(i-first)*42;
+    if(!visible(y,37)) continue;
     box(10,y,300,37,chosen?UI_SELECTED:UI_CARD,7);
     if(chosen) box(10,y+8,3,21,accent,1);
     box(19,y+8,21,21,UI_LINE,5);label(String(AgentSelection::label(agent)).substring(0,1),25,y+10,accent,16);
-    label(fitted(t.title,252,16),48,y+3,UI_TEXT,16);
+    fittedLabel(t.title,48,y+3,252,UI_TEXT,16);
     label(labels[t.status],48,y+22,color(t.status));
     label(elapsed(t.started),222,y+22,UI_DIM);
   }
@@ -113,9 +132,9 @@ void taskPage() {
   if(visible<3) {
     Task& t=view.tasks[selection[0]];int y=79+visible*42,h=202-y;
     box(10,y,300,h,UI_CARD,8);
-    label(visible==1?"当前动作":"当前动作 · "+fitted(t.action,200),20,y+7,UI_DIM);
+    if(::visible(y+7,14)) label(visible==1?"当前动作":"当前动作 · "+fitted(t.action,200),20,y+7,UI_DIM);
     if(visible==1) {
-      label(fitted(t.action[0]?String(t.action):String("正在执行任务"),278,16),20,y+24,UI_CYAN,16);
+      fittedLabel(t.action[0]?String(t.action):String("正在执行任务"),20,y+24,278,UI_CYAN,16);
       wrap(t.summary,20,y+46,280,2,UI_DIM);
     }
   }
@@ -125,7 +144,7 @@ void approvalPage(uint32_t now) {
   Approval& a=view.approvals[selection[1]];
   pill(AgentSelection::label(AgentSelection::index(a.source)),10,41,UI_AMBER,90);
   label(String(selection[1]+1)+" / "+view.approvalCount,268,44,UI_DIM);
-  label(fitted(a.title,292,16),12,64,UI_TEXT,16);
+  fittedLabel(a.title,12,64,292,UI_TEXT,16);
   box(10,86,300,104,UI_CARD,8);box(10,95,3,85,UI_AMBER,1);
   wrap(a.command,24,90,272,7,UI_AMBER);
   bool allowed=a.canApprove && commandFits(a.command);
@@ -146,7 +165,7 @@ void metricPage() {
     if(!m.quotaAvailable || !m.quotaCount) {emptyState("暂未提供套餐额度","此来源未返回额度数据",false);return;}
     for(int i=0;i<min(m.quotaCount,2);i++) {
       Quota& q=m.quotas[i];int y=70+i*68;float remaining=constrain(100-q.used,0.0f,100.0f);
-      box(10,y,300,62,UI_CARD,9);label(fitted(q.label,154),22,y+8,UI_DIM);
+      box(10,y,300,62,UI_CARD,9);fittedLabel(q.label,22,y+8,154,UI_DIM);
       label(String(remaining,0)+"%",213,y+5,remaining<10?UI_RED:accent,26);
       label("剩余",273,y+15,UI_DIM);
       progress(22,y+35,276,8,remaining/100,remaining<10?UI_RED:accent);
@@ -205,6 +224,7 @@ float hostValue(const HostSample& sample,int channel) {
   return channel==0?sample.cpu:channel==1?sample.memory:channel==2?sample.rx:sample.tx;
 }
 void hostTrend(int channel,float maximum,uint16_t c,uint32_t newest) {
+  if(!visible(115,48)) return;
   int previousX=-1,previousY=0;uint32_t previousAt=0;
   for(int i=0;i<view.host.count;i++) {
     const HostSample& sample=view.host.history[i];
@@ -258,6 +278,7 @@ void hostPage() {
   }
 }
 void settingIcon(int which,int x,int y,uint16_t c) {
+  if(!visible(y-10,21)) return;
   if(which==0) {dot(x,y,4,c);for(int i=0;i<8;i++) {float a=i*PI/4;segment(x+cosf(a)*7,y+sinf(a)*7,x+cosf(a)*9,y+sinf(a)*9,c);}}
   else if(which==1) {box(x-7,y-3,4,6,c);segment(x-3,y-3,x+1,y-7,c);segment(x+1,y-7,x+1,y+7,c);segment(x+1,y+7,x-3,y+3,c);segment(x+5,y-4,x+7,y,c);segment(x+7,y,x+5,y+4,c);}
   else if(which==2) wifiIcon(x,y-4,c);
@@ -275,7 +296,7 @@ void settingsPage(const String& message) {
     if(i==2 || i==4) label(">",290,y+5,UI_DIM);
     if(i==3) label(WiFi.status()==WL_CONNECTED?"已连接":"未连接",250,y+6,UI_DIM);
   }
-  label(setting==3?"IP "+WiFi.localIP().toString():setting==4?"按 B 返回进入设置前的页面":fitted(message,296),12,187,UI_DIM);
+  if(visible(187,14)) label(setting==3?"IP "+WiFi.localIP().toString():setting==4?"按 B 返回进入设置前的页面":fitted(message,296),12,187,UI_DIM);
 
 }
 void portalPage(const String& message) {
@@ -287,6 +308,7 @@ void portalPage(const String& message) {
 }
 void drawScene(const String& message,bool stale,uint32_t now) {
   sceneX=0;
+  if(visible(0,34)) {
   label("AI",10,7,UI_CYAN,16);label(apActive?"Wi-Fi 配网":pages[page],39,7,UI_TEXT,16);
   if(!apActive && page==0 && view.count) label(String(view.offset+selection[0]+1)+" / "+view.total,125,9,UI_DIM);
   if(apActive) pill("AP",244,5,UI_AMBER,36);
@@ -294,10 +316,14 @@ void drawScene(const String& message,bool stale,uint32_t now) {
   else pill("长 B 返回",206,5,UI_CYAN,74);
   wifiIcon(299,12,WiFi.status()!=WL_CONNECTED?UI_RED:(stale || message!="已连接")?UI_AMBER:UI_GREEN);
   segment(10,32,310,32,UI_LINE);
+  }
+  if(visible(40,169)) {
   sceneX=(int)((1-sceneProgress)*18)*transitionDirection;
   if(apActive) portalPage(message);
   else if(page==0) taskPage();else if(page==1) approvalPage(now);else if(page==2) metricPage();else if(page==3) sourcePage();else if(page==4) hostPage();else settingsPage(message);
   sceneX=0;
+  }
+  if(visible(209,31)) {
   segment(10,209,310,209,UI_LINE);
   bool toast=(int32_t)(controlToastUntil-now)>0;
   String age=view.received?String((now-view.received)/1000)+" 秒前":String("尚未同步");
@@ -305,17 +331,35 @@ void drawScene(const String& message,bool stale,uint32_t now) {
   label(fitted(status,294),12,211,toast?UI_AMBER:(stale || message!="已连接")?UI_RED:UI_DIM);
   if(page==Navigation::SETTINGS) {key("A","上一项",10);key("B",setting==4?"返回":"调整",113);key("C","下一项",218);}
   else {key("A",page==1?"页/长按拒绝":"上一页",10);key("B",page==0?"任务/长设置":page==1?"请求/长设置":page==2?"来源/长设置":page==4?"资源/网络":page==3?"选择/长设置":"长按设置",113);key("C",page==0?"页/长按详情":page==1?"页/长按同意":page==2?(metricMode?"页/长按图表":"页/长按额度"):page==3?"页/长按显示":"下一页",218);}
+  }
 }
 void drawFrame(const String& message,bool stale,uint32_t now) {
-  float t=constrain((now-transitionAt)/240.0f,0.0f,1.0f);sceneProgress=1-powf(1-t,3);
+  float t=constrain((now-transitionAt)/240.0f,0.0f,1.0f),remaining=1-t;
+  sceneProgress=1-remaining*remaining*remaining;
+  paintMicros=pushMicros=0;
   gfx=canvasReady?(lgfx::LGFXBase*)&canvas:(lgfx::LGFXBase*)&M5.Display;
   if(canvasReady) {
+    M5.Display.startWrite();
     for(stripY=0;stripY<240;stripY+=STRIP_HEIGHT) {
-      canvas.fillScreen(UI_BG);drawScene(message,stale,now);
-      const uint32_t* pixels=(const uint32_t*)canvas.getBuffer();uint32_t hash=2166136261UL;
+      uint32_t began=micros();
+      // With one buffer, wait before modifying pixels still being read by DMA.
+      if(!canvasDoubleReady) {M5.Display.waitDMA();pushMicros+=micros()-began;began=micros();}
+      M5Canvas& strip=canvasDoubleReady && (stripY/STRIP_HEIGHT)%2?canvasAlternate:canvas;
+      gfx=&strip;
+      strip.fillScreen(UI_BG);drawScene(message,stale,now);
+      const uint32_t* pixels=(const uint32_t*)strip.getBuffer();uint32_t hash=2166136261UL;
       for(int i=0;i<320*STRIP_HEIGHT/2;i++) hash=(hash^pixels[i])*16777619UL;
-      if(stripHashes[stripY/STRIP_HEIGHT]!=hash) {canvas.pushSprite(0,stripY);stripHashes[stripY/STRIP_HEIGHT]=hash;}
+      paintMicros+=micros()-began;
+      // Draw into the other strip while the previous transfer runs. Always wait
+      // here, even for unchanged strips, so neither buffer is reused prematurely.
+      began=micros();M5.Display.waitDMA();pushMicros+=micros()-began;
+      if(stripHashes[stripY/STRIP_HEIGHT]!=hash) {
+        began=micros();strip.pushSprite(0,stripY);pushMicros+=micros()-began;
+        stripHashes[stripY/STRIP_HEIGHT]=hash;
+      }
     }
+    uint32_t began=micros();M5.Display.waitDMA();pushMicros+=micros()-began;
+    M5.Display.endWrite();
   } else {stripY=0;M5.Display.fillScreen(UI_BG);drawScene(message,stale,now);}
   gfx=&M5.Display;stripY=0;sceneX=0;
 }

@@ -107,8 +107,10 @@ int hostMode=0;
 bool requestedHost=false;
 String selectedApprovalId;
 M5Canvas canvas(&M5.Display);
-bool canvasReady=false;
+M5Canvas canvasAlternate(&M5.Display);
+bool canvasReady=false,canvasDoubleReady=false;
 uint32_t transitionAt=0, frameMicros=0, aPressedAt=0, cPressedAt=0;
+uint32_t paintMicros=0,pushMicros=0,transitionFrames=0,transitionWorstMicros=0;
 int transitionDirection=1;
 
 void lock() { xSemaphoreTake(guard, portMAX_DELAY); }
@@ -369,18 +371,22 @@ void startPortal() {
   portal.onNotFound([]{portal.sendHeader("Location","/",true);portal.send(302,"text/plain","");});
   portal.begin();apActive=true;dirty=true;
 }
+void beginTransition() {
+  transitionAt=millis();transitionFrames=0;transitionWorstMicros=0;
+  textPage=0;dirty=true;
+}
 void changePage(int next) {
   transitionDirection=next<page?-1:1;navigation.move(next);
-  transitionAt=millis();textPage=0;dirty=true;
+  beginTransition();
   lock();requestedSource=0;requestedHost=page==4;unlock();
 }
 
 void toggleSettings() {
-  navigation.toggleSettings();transitionAt=millis();textPage=0;dirty=true;
+  navigation.toggleSettings();beginTransition();
   lock();requestedHost=page==4 || (page==Navigation::SETTINGS && navigation.previousPage==4);unlock();
 }
 void leaveSettings() {
-  navigation.leaveSettings();transitionAt=millis();textPage=0;dirty=true;
+  navigation.leaveSettings();beginTransition();
   lock();requestedHost=page==4;unlock();
 }
 void adjustSetting() {
@@ -473,10 +479,12 @@ void render() {
   String fingerprint=String(hostMode)+String(page)+"|"+message+"|"+String(stale)+"|"+String(displayReceived)+"|"+String(now/1000)+"|"+String(setting)+"|"+String(brightness)+"|"+String(muted)+"|"+String(metricSource)+"|"+String(metricMode)+"|"+String(selection[0])+"|"+String(selection[1])+"|"+String(textPage)+controlToast;
   bool holding=page==1 && !acSuppress && (M5.BtnA.isPressed() || M5.BtnC.isPressed());
   bool animating=now-transitionAt<240;
-  if(dirty || oldBody!=fingerprint || animating || sceneProgress<1 || holding) {
+  bool animationFrame=animating || sceneProgress<1;
+  if(dirty || oldBody!=fingerprint || animationFrame || holding) {
     uint32_t began=micros();
     drawFrame(message,stale,now);
     frameMicros=micros()-began;oldBody=fingerprint;
+    if(animationFrame) {transitionFrames++;transitionWorstMicros=max(transitionWorstMicros,frameMicros);}
   }
   dirty=false;
   // Baseline the current event sequence once per boot; no historical sound replay.
@@ -508,7 +516,7 @@ void serialDiagnostics() {
       Serial.printf("HTTP {\"snapshot_reads\":%lu,\"host_reads\":%lu,\"snapshot_errors\":%lu,\"host_errors\":%lu,\"expected\":%lu,\"received\":%lu,\"json_capacity\":%u}\n",sr,hr,se,he,expected,received,networkJson.capacity());
     } else if(line=="MEM_INFO") {
       const uint32_t caps=MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT;
-      Serial.printf("MEM {\"byte_heap\":%u,\"min_byte_heap\":%u,\"max_byte_block\":%u,\"canvas_bytes\":%u}\n",heap_caps_get_free_size(caps),heap_caps_get_minimum_free_size(caps),heap_caps_get_largest_free_block(caps),canvasReady?320*STRIP_HEIGHT*2:0);
+      Serial.printf("MEM {\"byte_heap\":%u,\"min_byte_heap\":%u,\"max_byte_block\":%u,\"canvas_bytes\":%u}\n",heap_caps_get_free_size(caps),heap_caps_get_minimum_free_size(caps),heap_caps_get_largest_free_block(caps),canvasReady?320*STRIP_HEIGHT*2*(canvasDoubleReady?2:1):0);
     } else if(line.startsWith("TAB ")) {changePage(line.substring(4).toInt());render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
     else if(line=="SETTINGS") {if(page!=Navigation::SETTINGS) toggleSettings();render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
     else if(line=="BACK") {if(page==Navigation::SETTINGS) leaveSettings();render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
@@ -524,7 +532,7 @@ void serialDiagnostics() {
       bool comma=false;for(int i=0;i<AgentSelection::COUNT;i++) if(view.agents[i].detected) {Serial.printf("%s\"%s\"",comma?",":"",AgentSelection::id(i));comma=true;}Serial.println("]}");
     }
     else if(line=="HOST_MODE") {hostMode=(hostMode+1)%2;dirty=true;render();Serial.println("UI host mode switched");}
-    else if(line=="PERF") {Serial.printf("PERF {\"strip_buffer\":%s,\"frame_us\":%lu}\n",canvasReady?"true":"false",frameMicros);}
+    else if(line=="PERF") {Serial.printf("PERF {\"strip_buffer\":%s,\"double_buffer\":%s,\"frame_us\":%lu,\"paint_us\":%lu,\"push_us\":%lu,\"animation_frames\":%lu,\"animation_worst_us\":%lu}\n",canvasReady?"true":"false",canvasDoubleReady?"true":"false",frameMicros,paintMicros,pushMicros,transitionFrames,transitionWorstMicros);}
     else if(line=="TEST_SOUND") {if(!muted) beepsRemaining=3;} else if(line=="SCREEN") {
       // Explicit diagnostic only: capture current LCD pixels, no configuration or credentials.
       Serial.println("RGB 320 240");uint8_t row[320*3];
@@ -549,6 +557,8 @@ void setup() {
   // ESP.getFreeHeap() includes word-only IRAM, which cannot serve those buffers.
   canvas.setColorDepth(16);canvas.setPsram(false);
   canvasReady=canvas.createSprite(320,STRIP_HEIGHT)!=nullptr;
+  canvasAlternate.setColorDepth(16);canvasAlternate.setPsram(false);
+  canvasDoubleReady=canvasReady && canvasAlternate.createSprite(320,STRIP_HEIGHT)!=nullptr;
   prefs.begin("ai-monitor",false);
   agentSelection.hidden=prefs.getUShort("agentHidden",0);
   brightness=prefs.getUChar("brightness",128);muted=prefs.getBool("muted",false);
@@ -592,6 +602,7 @@ void loop() {
   if(M5.BtnA.wasReleased()) aLong=false;
   if(!M5.BtnA.isPressed() && !M5.BtnC.isPressed()) acSuppress=false;
   if(beepsRemaining>0 && (int32_t)(now-nextBeep)>=0) {M5.Speaker.tone(1800,100);beepsRemaining--;nextBeep=now+220;}
-  if(dirty || now-lastRender>=50) {render();lastRender=now;}
-  serialDiagnostics();delay(5);
+  bool animating=now-transitionAt<240 || sceneProgress<1;
+  if(dirty || now-lastRender>=(animating?16U:50U)) {render();lastRender=now;}
+  serialDiagnostics();delay(animating?1:5);
 }

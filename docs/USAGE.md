@@ -23,7 +23,9 @@ Core 一代通过局域网 Wi-Fi 显示当前正在运行的 Codex/Hermes/OpenCo
 
 审批不会开启整会话或永久放行，不启动、停止或发送 AI 任务。命令过长、内容不完整、数据过期或不支持的请求需在电脑上处理。输入问题、文件变更和权限扩展审批暂不提供设备响应。审批操作通过独立网络任务执行，不阻塞按钮。完成一声、等待两声、失败三声，可在设置中静音。
 
-界面采用深色卡片、来源徽标、状态图标、带刻度的七日柱状图、缓存与额度进度条、按住审批的确认进度及切页动画。320×240 RGB565 画面通过 320×40 分块缓冲绘制（25,600 字节），仅推送变化的块；网络在另一任务执行。相较先前的 80 行缓冲，释放 25,600 字节可供 TCP 接收、Wi-Fi 报文和声音 DMA 使用，画面色彩与布局保持一致。
+界面采用深色卡片、来源徽标、状态图标、带刻度的七日柱状图、缓存与额度进度条、按住审批的确认进度及切页动画。320×240 RGB565 画面通过两块 320×20 缓冲交替绘制与 DMA 传输，总量仍为 25,600 字节，画面色彩与布局保持一致。每个缓冲只处理其可见区域，跳过屏幕外的文字排版；仅推送变化的块。复用像素缓冲前等待相应 DMA 完成，避免传输时改写造成花屏；第二块分配失败时使用单缓冲。
+
+动画周期为 240ms，绘制调度间隔 16ms，普通刷新仍为 50ms；实机约 8–11 个动画帧，受绘制与 SPI 传输限制，不宣称固定 60fps。网络在另一任务执行；相比最初 80 行缓冲，仍保留释放的 25,600 字节供 TCP、Wi-Fi 报文和声音使用。
 
 ## 数据的含义
 
@@ -89,7 +91,9 @@ Hermes 桌面连接只读取其本地桥接 Token，保留在主机内存中，�
 .venv/bin/python tools/device.py screen --output .private/device-screen.ppm
 ```
 
-USB 只读界面诊断支持 `TAB 0..4`、`SETTINGS`、`BACK`、`NEXT_SETTING`、`SELECT_BACK`、`DETAIL`、`METRIC`、`MODE`、`HOST_MODE`、`HTTP_DIAG`、`NET_INFO`、`MEM_INFO`、`AGENTS` 和 `PERF`，不触发审批决定。`PERF` 返回实际整帧绘制时间与分块缓冲启用情况。
+USB 只读界面诊断支持 `TAB 0..4`、`SETTINGS`、`BACK`、`NEXT_SETTING`、`SELECT_BACK`、`DETAIL`、`METRIC`、`MODE`、`HOST_MODE`、`HTTP_DIAG`、`NET_INFO`、`MEM_INFO`、`AGENTS` 和 `PERF`，不触发审批决定。`PERF` 返回整帧耗时、排版绘制耗时、DMA 提交/等待耗时、双缓冲状态，以及当前切页的累计帧数和最慢帧。DMA 和绘制并行，所以计数不等同于总线传输时间。
+
+`.venv/bin/python tools/check-animation.py --verify` 先等待真实主机曲线加载，再循环测量五页。验证双缓冲启用，每次动画至少六帧、最慢帧小于 60ms，同时检查 uptime 连续与字节内存余量。`--cycles` 可指定 1–5 轮，默认两轮。性能脱敏样本见 `tests/fixtures/core-animation-probe.json`。
 
 SDK 调试日志已关闭，避免 Arduino 2.0.16 在长串口截图期间遇到网络错误时忙等 TX-idle 并触发看门狗；连接错误仍通过屏幕和 INFO 报告。
 

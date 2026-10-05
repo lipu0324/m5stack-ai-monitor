@@ -1,0 +1,49 @@
+{
+  "device": "M5Stack Core 1, 320x240, no PSRAM",
+  "spi_hz": 40000000,
+  "pixel_buffer_bytes": 25600,
+  "animation_ms": 240,
+  "method": "PERF samples near start of transitions; second cycle, live data may change between runs",
+  "pages": [
+    {
+      "page": 0,
+      "before_frame_us": 82943,
+      "after_frame_us": 28908,
+      "after_settled_us": 22637,
+      "animation_frames": 10,
+      "animation_worst_us": 34563
+    },
+    {
+      "page": 1,
+      "before_frame_us": 71580,
+      "after_frame_us": 25124,
+      "after_settled_us": 17024,
+      "animation_frames": 11,
+      "animation_worst_us": 34114
+    },
+    {
+      "page": 2,
+      "before_frame_us": 81223,
+      "after_frame_us": 27785,
+      "after_settled_us": 22444,
+      "animation_frames": 10,
+      "animation_worst_us": 33027
+    },
+    {
+      "page": 3,
+      "before_frame_us": 125445,
+      "after_frame_us": 33078,
+      "after_settled_us": 23619,
+      "animation_frames": 8,
+      "animation_worst_us": 38855
+    },
+    {
+      "page": 4,
+      "before_frame_us": 69078,
+      "after_frame_us": 26230,
+      "after_settled_us": 15732,
+      "animation_frames": 10,
+      "animation_worst_us": 32482
+    }
+  ]
+}
