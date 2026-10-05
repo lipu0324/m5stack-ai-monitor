@@ -15,16 +15,16 @@ class NavigationTests(unittest.TestCase):
 #include "navigation.h"
 int main() {
   Navigation n;
-  for(int i=0;i<20;i++) {n.move(n.page+1);assert(n.page==(i+1)%4);}
-  for(int i=0;i<20;i++) {n.move(n.page-1);assert(n.page>=0 && n.page<4);}
-  for(int origin=0;origin<4;origin++) {
-    n.move(origin);n.enterSettings();assert(n.page==4 && n.setting==0);
-    for(int i=0;i<10;i++) {n.selectSetting(1);assert(n.setting==(i+1)%5);assert(n.page==4);}
+  for(int i=0;i<20;i++) {n.move(n.page+1);assert(n.page==(i+1)%Navigation::TAB_COUNT);}
+  for(int i=0;i<20;i++) {n.move(n.page-1);assert(n.page>=0 && n.page<Navigation::TAB_COUNT);}
+  for(int origin=0;origin<Navigation::TAB_COUNT;origin++) {
+    n.move(origin);n.enterSettings();assert(n.page==Navigation::SETTINGS && n.setting==0);
+    for(int i=0;i<10;i++) {n.selectSetting(1);assert(n.setting==(i+1)%5);assert(n.page==Navigation::SETTINGS);}
     n.selectSetting(-1);assert(n.setting==4);n.leaveSettings();assert(n.page==origin);
-    n.toggleSettings();assert(n.page==4);n.toggleSettings();assert(n.page==origin);
+    n.toggleSettings();assert(n.page==Navigation::SETTINGS);n.toggleSettings();assert(n.page==origin);
   }
-  n.previousPage=-7;n.leaveSettings();assert(n.page==1);
-  n.move(4);assert(n.page==0);
+  n.previousPage=-7;n.leaveSettings();assert(n.page==3);
+  n.move(Navigation::TAB_COUNT);assert(n.page==0);
 }
 '''
         with tempfile.TemporaryDirectory() as d:

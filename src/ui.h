@@ -187,6 +187,65 @@ void sourcePage() {
   box(10,183,300,22,UI_SELECTED,6);wifiIcon(24,190,WiFi.status()==WL_CONNECTED?UI_CYAN:UI_RED);
   label("Wi-Fi",40,187,UI_DIM);label(WiFi.localIP().toString(),184,187,UI_TEXT);
 }
+String byteRate(float n) {
+  return n>=1048576?String(n/1048576,1)+"M/s":n>=1024?String(n/1024,1)+"K/s":String(n,0)+"B/s";
+}
+float hostValue(const HostSample& sample,int channel) {
+  return channel==0?sample.cpu:channel==1?sample.memory:channel==2?sample.rx:sample.tx;
+}
+void hostTrend(int channel,float maximum,uint16_t c,uint32_t newest) {
+  int previousX=-1,previousY=0;uint32_t previousAt=0;
+  for(int i=0;i<view.host.count;i++) {
+    const HostSample& sample=view.host.history[i];
+    int64_t age=(int64_t)newest-sample.at;
+    if(age<0 || age>118 || !(sample.valid & (1<<channel))) {previousX=-1;continue;}
+    int x=40+(118-age)*254/118;
+    int y=160-(int)(constrain(hostValue(sample,channel)/maximum,0.0f,1.0f)*43*sceneProgress);
+    if(previousX>=0 && sample.at>=previousAt && sample.at-previousAt<=5) {
+      segment(previousX,previousY,x,y,c);segment(previousX,previousY+1,x,y+1,c);
+    }
+    previousX=x;previousY=y;previousAt=sample.at;
+  }
+  if(previousX>=0) dot(previousX,previousY,2,c);
+}
+void hostPage() {
+  HostMetric& h=view.host;
+  if(!h.received) {emptyState("正在获取主机状态","采样曲线每两秒更新",false);return;}
+  if(!h.available) {emptyState("主机采样不可用",h.detail[0]?String(h.detail):String("请更新本机监视服务"),false);return;}
+  box(10,41,146,50,UI_CARD,8);box(164,41,146,50,UI_CARD,8);
+  label(hostMode?"下载 / RX":"CPU",22,46,UI_DIM);label(hostMode?"上传 / TX":"内存",176,46,UI_DIM);
+  label(hostMode?(h.networkReady?byteRate(h.rx):"--"):h.cpuReady?String(h.cpu,1)+"%":"--",22,61,UI_CYAN,26);
+  label(hostMode?(h.networkReady?byteRate(h.tx):"--"):String(h.memory,1)+"%",176,61,UI_GREEN,26);
+  box(10,97,300,85,UI_CARD,9);
+  dot(22,106,3,UI_CYAN);label(hostMode?"下载":"CPU",30,100,UI_CYAN);
+  dot(80,106,3,UI_GREEN);label(hostMode?"上传":"内存",88,100,UI_GREEN);
+  label(hostMode?fitted(String(h.interface),96):"近 2 分钟",212,100,UI_DIM);
+  float maximum=100;
+  if(hostMode) {
+    maximum=1024;
+    for(int i=0;i<h.count;i++) maximum=max(maximum,max(h.history[i].rx,h.history[i].tx)*1.1f);
+  }
+  for(int i=0;i<3;i++) {
+    int y=117+i*21;segment(40,y,294,y,UI_LINE);
+    String axis=hostMode?(maximum*(2-i)/2>=1048576?String(maximum*(2-i)/2097152,1)+"M":String(maximum*(2-i)/2048,0)+"K"):String(100-i*50);
+    label(axis,14,y-5,UI_DIM);
+  }
+  label("-2分",40,166,UI_DIM);label("-1分",148,166,UI_DIM);label("现在",270,166,UI_DIM);
+  if(h.count) {
+    uint32_t newest=h.history[h.count-1].at;
+    hostTrend(hostMode?2:0,maximum,UI_CYAN,newest);hostTrend(hostMode?3:1,maximum,UI_GREEN,newest);
+  }
+  if(hostMode && !h.networkReady) label("等待有效网卡速率采样",83,134,UI_AMBER);
+  box(10,186,300,19,UI_SELECTED,5);
+  if(hostMode) {
+    label("运行 "+String(h.uptime/86400)+"天 "+String(h.uptime/3600%24)+"时",19,189,UI_DIM);
+    label("负载 "+String(h.load,2)+" / "+String(h.cpuCount)+"核",176,189,UI_TEXT);
+  } else {
+    label("磁盘",19,189,UI_DIM);progress(52,192,61,5,h.disk/100,UI_AMBER);
+    label(String(h.disk,0)+"%",119,189,UI_AMBER);
+    label(String(h.memoryUsed,1)+" / "+String(h.memoryTotal,1)+"GiB",182,189,UI_DIM);
+  }
+}
 void settingIcon(int which,int x,int y,uint16_t c) {
   if(which==0) {dot(x,y,4,c);for(int i=0;i<8;i++) {float a=i*PI/4;segment(x+cosf(a)*7,y+sinf(a)*7,x+cosf(a)*9,y+sinf(a)*9,c);}}
   else if(which==1) {box(x-7,y-3,4,6,c);segment(x-3,y-3,x+1,y-7,c);segment(x+1,y-7,x+1,y+7,c);segment(x+1,y+7,x-3,y+3,c);segment(x+5,y-4,x+7,y,c);segment(x+7,y,x+5,y+4,c);}
@@ -220,21 +279,21 @@ void drawScene(const String& message,bool stale,uint32_t now) {
   label("AI",10,7,UI_CYAN,16);label(apActive?"Wi-Fi 配网":pages[page],39,7,UI_TEXT,16);
   if(!apActive && page==0 && view.count) label(String(view.offset+selection[0]+1)+" / "+view.total,125,9,UI_DIM);
   if(apActive) pill("AP",244,5,UI_AMBER,36);
-  else if(page!=4) for(int i=0;i<4;i++) box(194+i*13,15,i==page?9:4,4,i==page?UI_CYAN:UI_LINE,2);
+  else if(page!=Navigation::SETTINGS) for(int i=0;i<Navigation::TAB_COUNT;i++) box(181+i*13,15,i==page?9:4,4,i==page?UI_CYAN:UI_LINE,2);
   else pill("长 B 返回",206,5,UI_CYAN,74);
   wifiIcon(299,12,WiFi.status()!=WL_CONNECTED?UI_RED:(stale || message!="已连接")?UI_AMBER:UI_GREEN);
   segment(10,32,310,32,UI_LINE);
   sceneX=(int)((1-sceneProgress)*18)*transitionDirection;
   if(apActive) portalPage(message);
-  else if(page==0) taskPage();else if(page==1) approvalPage(now);else if(page==2) metricPage();else if(page==3) sourcePage();else settingsPage(message);
+  else if(page==0) taskPage();else if(page==1) approvalPage(now);else if(page==2) metricPage();else if(page==3) sourcePage();else if(page==4) hostPage();else settingsPage(message);
   sceneX=0;
   segment(10,209,310,209,UI_LINE);
   bool toast=(int32_t)(controlToastUntil-now)>0;
   String age=view.received?String((now-view.received)/1000)+" 秒前":String("尚未同步");
   String status=toast?controlToast:message!="已连接"?message+" · "+(stale && view.received?String("数据已过期 ")+age:age):stale?"数据已过期 · "+age:"已同步 · "+age;
   label(fitted(status,294),12,211,toast?UI_AMBER:(stale || message!="已连接")?UI_RED:UI_DIM);
-  if(page==4) {key("A","上一项",10);key("B",setting==4?"返回":"调整",113);key("C","下一项",218);}
-  else {key("A",page==1?"页/长按拒绝":"上一页",10);key("B",page==0?"任务/长设置":page==1?"请求/长设置":page==2?"来源/长设置":"长按设置",113);key("C",page==0?"页/长按详情":page==1?"页/长按同意":page==2?(metricMode?"页/长按图表":"页/长按额度"):"下一页",218);}
+  if(page==Navigation::SETTINGS) {key("A","上一项",10);key("B",setting==4?"返回":"调整",113);key("C","下一项",218);}
+  else {key("A",page==1?"页/长按拒绝":"上一页",10);key("B",page==0?"任务/长设置":page==1?"请求/长设置":page==2?"来源/长设置":page==4?"资源/网络":"长按设置",113);key("C",page==0?"页/长按详情":page==1?"页/长按同意":page==2?(metricMode?"页/长按图表":"页/长按额度"):"下一页",218);}
 }
 void drawFrame(const String& message,bool stale,uint32_t now) {
   float t=constrain((now-transitionAt)/240.0f,0.0f,1.0f);sceneProgress=1-powf(1-t,3);

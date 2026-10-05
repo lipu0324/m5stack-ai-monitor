@@ -10,9 +10,10 @@ Core 一代通过局域网 Wi-Fi 显示当前正在运行的 Codex/Hermes 任务
 | 待审批 | 当前可处理的命令审批及命令内容 |
 | 用量图表 | 近七日 Token 柱状图、输入/输出数、缓存命中率；可切换套餐额度进度条 |
 | 来源 | Codex 与 Hermes 的在线情况和采集路径 |
+| 主机状态 | CPU / 内存两分钟双曲线，网络 RX/TX 自动缩放曲线，磁盘占用、系统负载与开机时间；B 切换资源 / 网络 |
 | 设置（独立入口） | 亮度、声音、重新配网、连接信息、返回监视 |
 
-- A/C 短按：在四个监视页面之间前后切换，循环不包含设置。B：切换任务/审批；用量页切换 Codex/Hermes。
+- A/C 短按：在五个监视页面之间前后切换，循环不包含设置。B：切换任务/审批；用量页切换 Codex/Hermes；主机页切换资源/网络。
 - 运行页长按 C 0.8 秒：切换所选任务详情。
 - 用量页长按 C 0.8 秒：切换 Token 图表与套餐额度。
 - **待审批页长按 C 两秒：仅批准当前这一次；长按 A 两秒：拒绝。**
@@ -70,6 +71,7 @@ Hermes 桌面连接只读取其本地桥接 Token，保留在主机内存中，�
 
 - `GET /api/v1/snapshot?source=all|codex|hermes&cursor=...&view=all|active`：版本 1；默认兼容历史视图，设备使用 active；每页最多十个任务、二十个事件，响应上限 16KB。
 - 响应增加 `metrics` 与 `approvals`。套餐百分比来自原始 quota 窗口；未知值保持未知。
+- `GET /api/v1/host`：认证后的独立主机快照，返回 CPU、内存、根磁盘、load、uptime、默认出口网卡 RX/TX 字节速率及 60 个历史点。设备仅在主机页（或从主机页进入设置时）额外请求该接口，不挤占 AI 快照的 16KB 上限；两者复用同一个 JSON 解析区。`snapshot?host=1` 也可选附带主机数据，仍受原 16KB 上限约束。
 - `POST /api/v1/approvals/respond`：JSON `{"id":"<opaque approval id>","choice":"once|deny"}`。目标来自服务当前待审批表，客户端不能指定任意任务或命令。
 - 后端再次检查原始请求 ID，按精确请求响应，拒绝过期与重复请求；不接受 session/always。
 - Codex 通过原 Desktop IPC owner 转发 command approval；Hermes 通过原 Desktop backend 转发 `approval.respond`。不提供通用 RPC 转发接口。
@@ -84,7 +86,7 @@ Hermes 桌面连接只读取其本地桥接 Token，保留在主机内存中，�
 .venv/bin/python tools/device.py screen --output .private/device-screen.ppm
 ```
 
-USB 只读界面诊断支持 `TAB 0..3`、`SETTINGS`、`BACK`、`NEXT_SETTING`、`SELECT_BACK`、`DETAIL`、`METRIC`、`MODE` 和 `PERF`，不触发审批决定。`PERF` 返回实际整帧绘制时间与分块缓冲启用情况。
+USB 只读界面诊断支持 `TAB 0..4`、`SETTINGS`、`BACK`、`NEXT_SETTING`、`SELECT_BACK`、`DETAIL`、`METRIC`、`MODE` 、`HOST_MODE` 和 `PERF`，不触发审批决定。`PERF` 返回实际整帧绘制时间与分块缓冲启用情况。
 
 SDK 调试日志已关闭，避免 Arduino 2.0.16 在长串口截图期间遇到网络错误时忙等 TX-idle 并触发看门狗；连接错误仍通过屏幕和 INFO 报告。
 
@@ -94,3 +96,9 @@ LCD 截图可能包含临时热点密码，应保存到私有目录。测试不�
 长时间观察工具 `tools/soak.py` 仅供手动诊断，本次八小时观察已按用户要求取消。短测结果与实机验证边界见 [验证记录](../VALIDATION.md)。
 
 响铃后 JSON 解析使用启动时预留的 32KB 堆缓冲并复用，避免播放声音后再申请大块内存。INFO 同时报告 `max_heap_block`，解析失败显示具体错误类型。
+
+## 主机曲线的数据范围
+
+采集 Linux `/proc/stat`、`meminfo`、`uptime`、`loadavg` 和网卡计数，不采集进程命令行或文件内容。CPU 使用相邻总计数之差，guest 已计入 user/nice，不重复累加；idle 与 iowait 视为空闲。内存使用量为 MemTotal - MemAvailable，磁盘对应 `/`。默认按最低 metric 的 IPv4 默认路由选择网卡，可在私有 config.json 中用 `host_interface` 覆盖，不叠加虚拟网卡。网络单位为 B/s、KiB/s、MiB/s。
+
+历史只在服务内存中保留最近 60 点，每两秒采样一次，图表横轴显示最近两分钟。服务重启从新样本开始；主机重启或出口网卡变化会清空旧曲线。首次样本、计数重置或缺失网卡显示未知；采集失败保留上次值及原始时间并明确标记失败。

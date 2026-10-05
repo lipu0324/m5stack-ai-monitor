@@ -164,9 +164,31 @@ class HTTPTests(unittest.TestCase):
         with self.get('/api/v1/snapshot?source=hermes') as r:self.assertEqual(json.load(r)['tasks'],[])
 
     def test_bad_query_rejected(self):
-        for suffix in ('source=invalid','cursor=***'):
+        for suffix in ('source=invalid','cursor=***','host=invalid'):
             with self.assertRaises(urllib.error.HTTPError) as e:self.get('/api/v1/snapshot?'+suffix)
             self.assertEqual(e.exception.code,400)
+
+    def test_host_history_opt_in_authenticated_and_bounded(self):
+        for _ in range(70):
+            self.monitor.host.sample()
+        with self.get('/api/v1/snapshot') as r:
+            self.assertNotIn('host', json.load(r))
+        with self.get('/api/v1/snapshot?host=1&view=active') as r:
+            raw = r.read()
+            result = json.loads(raw)
+        self.assertLessEqual(len(raw), 16384)
+        self.assertTrue(result['host']['available'])
+        self.assertEqual(len(result['host']['history']), 60)
+        with self.get('/api/v1/host') as r:
+            raw = r.read()
+            self.assertEqual(len(json.loads(raw)['host']['history']), 60)
+            self.assertLess(len(raw), 6000)
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.get('/api/v1/snapshot?host=1', token='wrong')
+        self.assertEqual(error.exception.code, 401)
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.get('/api/v1/host', token='wrong')
+        self.assertEqual(error.exception.code, 401)
 
     def test_device_telemetry_authenticated_and_bounded(self):
         with self.get('/api/v1/snapshot?device=abc123&uptime=120&heap=120000&min_heap=90000') as r:

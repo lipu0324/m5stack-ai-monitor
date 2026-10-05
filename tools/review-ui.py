@@ -38,14 +38,14 @@ with connect() as s:
         if time.monotonic()>deadline:raise RuntimeError('Wi-Fi not recovered: '+json.dumps(state,ensure_ascii=False))
         time.sleep(1)
     print('Connected',json.dumps(state,ensure_ascii=False),flush=True)
-    for tab in (0,1,2,3,4,-1,0):
-        command(s,f'TAB {tab}');actual=info(s)['page'];assert actual==tab%4,(tab,actual)
-    for origin in range(4):
-        command(s,f'TAB {origin}');command(s,'SETTINGS');assert info(s)['page']==4
+    for tab in (0,1,2,3,4,5,-1,0):
+        command(s,f'TAB {tab}');actual=info(s)['page'];assert actual==tab%5,(tab,actual)
+    for origin in range(5):
+        command(s,f'TAB {origin}');command(s,'SETTINGS');assert info(s)['page']==5
         for _ in range(5):command(s,'NEXT_SETTING')
         command(s,'BACK');assert info(s)['page']==origin
         command(s,'SETTINGS');command(s,'SELECT_BACK');assert info(s)['page']==origin
-    print('Hardware navigation: 4-tab wrap, settings return and explicit back PASS',flush=True)
+    print('Hardware navigation: 5-tab wrap, settings return and explicit back PASS',flush=True)
     for tab,name in [(0,'v3-running'),(1,'v3-approvals'),(2,'v3-codex-tokens'),(3,'v3-sources')]:
         command(s,f'TAB {tab}');time.sleep(.4);screen(s,name);records.append(info(s))
         print(command(s,'PERF'),flush=True)

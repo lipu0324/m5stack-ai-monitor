@@ -19,6 +19,7 @@ from codex_ipc import CodexIPC
 from collectors import CodexCollector, HermesCollector
 from model import EventStore, STATES, sort_tasks
 from usage import AccountUsage
+from host_stats import HostStats
 
 LOG = logging.getLogger('ai-monitor')
 
@@ -62,6 +63,7 @@ class Monitor:
         self.last_saved = 0
         self.device = None
         self.account_usage = AccountUsage(config['codex_home'])
+        self.host = HostStats(interface=config.get('host_interface'))
         self.responded = []
         self.inflight = set()
 
@@ -107,6 +109,7 @@ class Monitor:
         return {'codex':codex,'hermes':self.collectors['hermes'].metrics}
 
     def poll(self):
+        self.host.sample()
         tasks, sources = [], {}
         for name, collector in self.collectors.items():
             try:
@@ -136,7 +139,7 @@ class Monitor:
                 self.poll()
         threading.Thread(target=work, name='status-collector', daemon=True).start()
 
-    def snapshot(self, source='all', cursor='', view='all'):
+    def snapshot(self, source='all', cursor='', view='all', host=False):
         if source not in ('all', 'codex', 'hermes'):
             raise ValueError('invalid source')
         if view not in ('all','active'):raise ValueError('invalid view')
@@ -152,13 +155,16 @@ class Monitor:
                         break
             page = [{k:v for k,v in t.items() if not k.startswith('_') and k not in ('pid','process_start')} for t in tasks[index:index + 10]]
             counts = {s: sum(t['status'] == s for t in tasks) for s in STATES}
-            return {'version': 1, 'revision': self.revision, 'generated_at': int(time.time()),
+            result = {'version': 1, 'revision': self.revision, 'generated_at': int(time.time()),
                     'observed_at': self.observed_at, 'sources': self.sources, 'device': self.device,
                     'counts': counts, 'total': len(tasks), 'offset': index, 'tasks': page,
                     'next_cursor': encode_cursor(page[-1]['id']) if page and index + len(page) < len(tasks) else '',
                     'approvals':self.approvals(),'metrics':self.metrics(),
                     'event_sequence': self.store.sequence,
                     'events': [e for e in reversed(self.store.events) if source == 'all' or e['source'] == source]}
+            if host:
+                result['host'] = self.host.snapshot()
+            return result
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -189,11 +195,17 @@ class Handler(BaseHTTPRequestHandler):
             self.response(401, {'error': 'unauthorized'})
             return
         url = urlsplit(self.path)
+        if url.path == '/api/v1/host':
+            self.response(200, {'version': 1, 'host': self.server.monitor.host.snapshot()})
+            return
         if url.path != '/api/v1/snapshot':
             self.response(404, {'error': 'not_found'})
             return
         query = parse_qs(url.query)
         try:
+            include_host = query.get('host', ['0'])[0]
+            if include_host not in ('0', '1'):
+                raise ValueError('invalid host option')
             device = query.get('device',[''])[0]
             if device and len(device)<=16 and all(c in '0123456789abcdef' for c in device):
                 try:
@@ -203,7 +215,7 @@ class Handler(BaseHTTPRequestHandler):
                             self.server.monitor.device = dict(stats,id=device,last_seen=int(time.time()))
                 except (ValueError,KeyError,IndexError):
                     pass
-            self.response(200, self.server.monitor.snapshot(query.get('source', ['all'])[0], query.get('cursor', [''])[0],query.get('view',['all'])[0]))
+            self.response(200, self.server.monitor.snapshot(query.get('source', ['all'])[0], query.get('cursor', [''])[0],query.get('view',['all'])[0],host=include_host=='1'))
         except ValueError:
             self.response(400, {'error': 'invalid_query'})
 

@@ -14,7 +14,7 @@
 enum Status : uint8_t { IDLE, RUNNING, APPROVAL, WAIT_INPUT, DONE, FAILED, INTERRUPTED, UNKNOWN };
 const char* states[] = {"idle","running","waiting_approval","waiting_input","completed","failed","interrupted","unknown"};
 const char* labels[] = {"空闲","运行中","等待审批","等待输入","已完成","失败","已中断","未知"};
-const char* pages[] = {"运行列表","待审批","用量图表","来源","设置"};
+const char* pages[] = {"运行列表","待审批","用量图表","来源","主机状态","设置"};
 struct Task {
   char id[96]{}, title[193]{}, summary[289]{}, action[145]{}, kind[25]{};
   Status status = UNKNOWN;
@@ -32,6 +32,15 @@ struct Metric {
   int quotaCount=0;
   Quota quotas[4];
 };
+struct HostSample { uint32_t at=0; float cpu=0,memory=0,rx=0,tx=0; uint8_t valid=0; };
+struct HostMetric {
+  bool available=false,cpuReady=false,networkReady=false;
+  uint32_t received=0,observed=0,uptime=0;
+  float cpu=0,memory=0,disk=0,memoryUsed=0,memoryTotal=0,load=0,rx=0,tx=0;
+  int cpuCount=0,count=0;
+  char interface[25]{},detail[49]{};
+  HostSample history[60];
+};
 struct Snapshot {
   Task tasks[10]; Event events[20]; Approval approvals[10]; Metric metrics[2];
   int approvalCount=0;
@@ -39,6 +48,7 @@ struct Snapshot {
   bool online[2]{}, healthy[2]{}, live[2]{};
   char detail[2][145]{}, cursor[160]{};
   uint32_t received=0, observed=0, generated=0, sequence=0;
+  HostMetric host;
 };
 static_assert(std::is_trivially_copyable<Snapshot>::value, "Snapshot reset requires plain data");
 void resetSnapshot(Snapshot& out) {
@@ -78,6 +88,8 @@ String pendingApprovalId, pendingApprovalChoice, controlResult, controlToast;
 uint32_t controlToastUntil=0;
 bool controlPending=false;
 int metricSource=0, metricMode=0;
+int hostMode=0;
+bool requestedHost=false;
 String selectedApprovalId;
 M5Canvas canvas(&M5.Display);
 bool canvasReady=false;
@@ -125,7 +137,7 @@ bool readConfig(Config& c) {
 }
 void setMessage(const String& value) { lock(); netMessage=value; unlock(); }
 
-bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,String& error) {
+bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,String& error,bool includeHost) {
   WiFiClient client;
   HTTPClient http;
   String base=cfg.url;
@@ -201,7 +213,35 @@ bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,Strin
       if(x.quotaCount>=4) break;Quota& row=x.quotas[x.quotaCount++];copyText(row.label,w["label"]|"");row.used=w["used_percent"]|0.0f;row.reset=w["reset_at"]|0U;row.minutes=w["duration_mins"]|0U;
     }
   }
-  out.received=millis();error="";return true;
+  out.received=millis();error="";
+  // Fetch trends separately: AI task/event payload and JSON arena stay bounded.
+  if(!includeHost) return true;
+  if(!http.begin(client,base+"/api/v1/host")) return true;
+  http.addHeader("Authorization","Bearer "+cfg.token);
+  code=http.GET();length=http.getSize();
+  if(code==404) {
+    out.host.received=millis();copyText(out.host.detail,"请更新本机监视服务");http.end();return true;
+  }
+  if(code!=200 || length<=0 || length>16384) {http.end();return true;}
+  payload=http.getString();http.end();
+  if(payload.length()!=(size_t)length || deserializeJson(doc,payload) || doc["version"].as<int>()!=1) return true;
+  JsonObject h=doc["host"];
+  if(!h.isNull()) {
+    HostMetric& x=out.host;x.received=millis();x.observed=h["observed_at"]|0U;
+    x.available=h["available"]|false;x.cpuReady=!h["cpu_percent"].isNull();x.cpu=h["cpu_percent"]|0.0f;
+    x.cpuCount=h["cpu_count"]|0;x.memory=h["memory"]["percent"]|0.0f;x.disk=h["disk"]["percent"]|0.0f;
+    x.memoryUsed=(h["memory"]["used"].as<uint64_t>())/1073741824.0;x.memoryTotal=(h["memory"]["total"].as<uint64_t>())/1073741824.0;
+    x.load=h["load"][0]|0.0f;x.uptime=h["uptime_seconds"]|0U;
+    JsonObject n=h["network"];x.networkReady=(n["available"]|false) && !n["rx_bps"].isNull() && !n["tx_bps"].isNull();
+    x.rx=n["rx_bps"]|0.0f;x.tx=n["tx_bps"]|0.0f;copyText(x.interface,n["interface"]|"");copyText(x.detail,h["detail"]|"");
+    for(JsonArray row:h["history"].as<JsonArray>()) {
+      if(x.count>=60) break;HostSample& sample=x.history[x.count++];sample.at=row[0]|0U;
+      sample.cpu=row[1]|0.0f;sample.memory=row[2]|0.0f;sample.rx=row[3]|0.0f;sample.tx=row[4]|0.0f;
+      for(int j=1;j<5;j++) if(!row[j].isNull()) sample.valid|=1<<(j-1);
+    }
+  }
+
+  return true;
 }
 
 void networkWorker(void*) {
@@ -217,6 +257,7 @@ void networkWorker(void*) {
     if(pending) {working=candidateConfig;candidatePending=false;testing=true;}
     else if(!testing) working=activeConfig;
     String cursor=requestedCursor[0];
+    bool includeHost=requestedHost;
     bool act=controlPending;String approvalId=pendingApprovalId,choice=pendingApprovalChoice;
     unlock();
     if(pending) {candidateError="";WiFi.disconnect(false);trying=false;retryAt=millis();backoff=1000;}
@@ -248,10 +289,10 @@ void networkWorker(void*) {
       } else result="审批服务地址无效";
       lock();controlResult=result;unlock();
     }
-    bool ok=fetch(working,0,cursor,*next,error);
+    bool ok=fetch(working,0,cursor,*next,error,includeHost);
     lock();networkStackFree=uxTaskGetStackHighWaterMark(nullptr);unlock();
     if(ok) {
-      lock();cache[0]=*next;
+      lock();if(!next->host.received) next->host=cache[0].host;cache[0]=*next;
       if(testing) {activeConfig=working;candidateValid=true;testing=false;closePortal=true;}
       netMessage="已连接";unlock();
       backoff=1000;retryAt=millis()+2000;
@@ -289,14 +330,16 @@ void startPortal() {
 void changePage(int next) {
   transitionDirection=next<page?-1:1;navigation.move(next);
   transitionAt=millis();textPage=0;dirty=true;
-  lock();requestedSource=0;unlock();
+  lock();requestedSource=0;requestedHost=page==4;unlock();
 }
 
 void toggleSettings() {
   navigation.toggleSettings();transitionAt=millis();textPage=0;dirty=true;
+  lock();requestedHost=page==4 || (page==Navigation::SETTINGS && navigation.previousPage==4);unlock();
 }
 void leaveSettings() {
   navigation.leaveSettings();transitionAt=millis();textPage=0;dirty=true;
+  lock();requestedHost=page==4;unlock();
 }
 void adjustSetting() {
   if(setting==0) {brightness=brightness>=224?64:brightness+32;M5.Display.setBrightness(brightness);prefs.putUChar("brightness",brightness);}
@@ -314,6 +357,7 @@ void selectNext() {
     else {lock();requestedCursor[0]=String(view.cursor);cache[0].count=0;cache[0].received=0;unlock();selection[0]=0;selectedId[0]="";}
   } else if(page==1 && view.approvalCount) {selection[1]=(selection[1]+1)%view.approvalCount;selectedApprovalId=view.approvals[selection[1]].id;}
   else if(page==2) metricSource=(metricSource+1)%2;
+  else if(page==4) hostMode=(hostMode+1)%2;
   dirty=true;
 }
 String compactTokens(uint64_t n) {
@@ -367,7 +411,8 @@ void render() {
     if(!found || selection[1]>=view.approvalCount) selection[1]=0;
     if(view.approvalCount) selectedApprovalId=view.approvals[selection[1]].id;
   }
-  String fingerprint=String(page)+"|"+message+"|"+String(stale)+"|"+String(displayReceived)+"|"+String(now/1000)+"|"+String(setting)+"|"+String(brightness)+"|"+String(muted)+"|"+String(metricSource)+"|"+String(metricMode)+"|"+String(selection[0])+"|"+String(selection[1])+"|"+String(textPage)+controlToast;
+  if(page==4 && view.host.observed && view.generated>view.host.observed+10) stale=true;
+  String fingerprint=String(hostMode)+String(page)+"|"+message+"|"+String(stale)+"|"+String(displayReceived)+"|"+String(now/1000)+"|"+String(setting)+"|"+String(brightness)+"|"+String(muted)+"|"+String(metricSource)+"|"+String(metricMode)+"|"+String(selection[0])+"|"+String(selection[1])+"|"+String(textPage)+controlToast;
   bool holding=page==1 && !acSuppress && (M5.BtnA.isPressed() || M5.BtnC.isPressed());
   bool animating=now-transitionAt<240;
   if(dirty || oldBody!=fingerprint || animating || sceneProgress<1 || holding) {
@@ -396,15 +441,16 @@ void serialDiagnostics() {
     line.trim();
     if(line=="INFO") {
       lock();String message=netMessage;uint32_t received=cache[0].received;int total=cache[0].total;uint32_t stackFree=networkStackFree;unlock();
-      Serial.printf("INFO {\"uptime\":%lu,\"heap\":%u,\"min_heap\":%u,\"max_heap_block\":%u,\"network_stack_free\":%lu,\"wifi\":%d,\"ap\":%s,\"page\":%d,\"tasks\":%d,\"age_ms\":%lu,\"message\":\"%s\"}\n",millis()/1000,ESP.getFreeHeap(),ESP.getMinFreeHeap(),ESP.getMaxAllocHeap(),stackFree,WiFi.status(),apActive?"true":"false",page,total,received?millis()-received:0,message.c_str());
+      Serial.printf("INFO {\"uptime\":%lu,\"heap\":%u,\"min_heap\":%u,\"max_heap_block\":%u,\"network_stack_free\":%lu,\"wifi\":%d,\"ap\":%s,\"page\":%d,\"tasks\":%d,\"visible_tasks\":%d,\"events\":%d,\"host_samples\":%d,\"host_available\":%s,\"host_age_ms\":%lu,\"age_ms\":%lu,\"message\":\"%s\"}\n",millis()/1000,ESP.getFreeHeap(),ESP.getMinFreeHeap(),ESP.getMaxAllocHeap(),stackFree,WiFi.status(),apActive?"true":"false",page,total,view.count,view.eventCount,view.host.count,view.host.available?"true":"false",view.host.received?millis()-view.host.received:0,received?millis()-received:0,message.c_str());
     } else if(line.startsWith("TAB ")) {changePage(line.substring(4).toInt());render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
-    else if(line=="SETTINGS") {if(page!=4) toggleSettings();render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
-    else if(line=="BACK") {if(page==4) leaveSettings();render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
-    else if(line=="NEXT_SETTING") {if(page==4) navigation.selectSetting(1);dirty=true;render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
-    else if(line=="SELECT_BACK") {if(page==4) {setting=4;adjustSetting();}render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
+    else if(line=="SETTINGS") {if(page!=Navigation::SETTINGS) toggleSettings();render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
+    else if(line=="BACK") {if(page==Navigation::SETTINGS) leaveSettings();render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
+    else if(line=="NEXT_SETTING") {if(page==Navigation::SETTINGS) navigation.selectSetting(1);dirty=true;render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
+    else if(line=="SELECT_BACK") {if(page==Navigation::SETTINGS) {setting=4;adjustSetting();}render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
     else if(line=="METRIC") {metricSource=(metricSource+1)%2;dirty=true;render();Serial.println("UI metric switched");}
     else if(line=="MODE") {metricMode=(metricMode+1)%2;dirty=true;render();Serial.println("UI metric mode switched");}
     else if(line=="DETAIL") {textPage=!textPage;dirty=true;render();Serial.println("UI detail switched");}
+    else if(line=="HOST_MODE") {hostMode=(hostMode+1)%2;dirty=true;render();Serial.println("UI host mode switched");}
     else if(line=="PERF") {Serial.printf("PERF {\"strip_buffer\":%s,\"frame_us\":%lu}\n",canvasReady?"true":"false",frameMicros);}
     else if(line=="TEST_SOUND") {if(!muted) beepsRemaining=3;} else if(line=="SCREEN") {
       // Explicit diagnostic only: capture current LCD pixels, no configuration or credentials.
@@ -421,7 +467,7 @@ void setup() {
   // Arduino 2.0.16 log_printf spins until TX is idle. A long SCREEN stream
   // keeps TX busy and can starve IDLE0 when WiFiClient logs an error.
   // Only our structured diagnostic replies use UART; errors remain on the LCD.
-  Serial.println("AI Monitor boot v3 UI");
+  Serial.println("AI Monitor boot v4 host UI");
   M5.Display.setRotation(1);M5.Display.fillScreen(UI_BG);
   // 51KB RGB565 strip, instead of a 154KB full-frame allocation on a non-PSRAM Core.
   canvas.setColorDepth(16);canvas.setPsram(false);
@@ -454,15 +500,15 @@ void loop() {
   }
   if(M5.BtnB.wasReleased()) {
     if(!bLong) {
-      if(page==4) {
+      if(page==Navigation::SETTINGS) {
         adjustSetting();
       } else selectNext();
     }
     bLong=false;lastButton=now;
   }
   if(!M5.BtnA.isPressed() || !M5.BtnC.isPressed()) {
-    if(M5.BtnA.wasClicked() && !acSuppress && !aLong) {if(page==4) navigation.selectSetting(-1);else changePage(page-1);dirty=true;}
-    if(M5.BtnC.wasClicked() && !acSuppress && !cLong) {if(page==4) navigation.selectSetting(1);else changePage(page+1);dirty=true;}
+    if(M5.BtnA.wasClicked() && !acSuppress && !aLong) {if(page==Navigation::SETTINGS) navigation.selectSetting(-1);else changePage(page-1);dirty=true;}
+    if(M5.BtnC.wasClicked() && !acSuppress && !cLong) {if(page==Navigation::SETTINGS) navigation.selectSetting(1);else changePage(page+1);dirty=true;}
   }
   if(M5.BtnC.wasReleased()) cLong=false;
   if(M5.BtnA.wasReleased()) aLong=false;
