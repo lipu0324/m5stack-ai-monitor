@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="560" viewBox="0 0 1120 560" role="img" aria-labelledby="title desc">
   <title id="title">M5Stack AI Monitor</title>
-  <desc id="desc">A pocket command center for Codex and Hermes. Illustrated screen uses fictional demo tasks and metrics.</desc>
+  <desc id="desc">A pocket command center for Codex, Hermes and OpenCode. Illustrated screen uses fictional demo tasks and metrics.</desc>
   <defs>
     <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#09121f"/><stop offset="1" stop-color="#152637"/></linearGradient>
     <linearGradient id="accent"><stop stop-color="#36ddf6"/><stop offset="1" stop-color="#43e4a5"/></linearGradient>
@@ -17,7 +17,7 @@
     <text x="56" y="168" fill="#eff7fc" font-size="66" font-weight="800" letter-spacing="-3">M5Stack</text>
     <text x="56" y="240" fill="url(#accent)" font-size="66" font-weight="800" letter-spacing="-3">AI Monitor</text>
     <text x="58" y="294" fill="#adc2d3" font-size="21">A tiny screen for your big AI workflows.</text>
-    <text x="58" y="329" fill="#708ba1" font-size="16">Codex + Hermes · Wi-Fi · Three buttons</text>
+    <text x="58" y="329" fill="#708ba1" font-size="16">Codex + Hermes + OpenCode · Wi-Fi · Three buttons</text>
     <g font-size="13" fill="#d5e6ef">
       <rect x="56" y="368" width="106" height="34" rx="8" fill="#19333f"/><text x="73" y="390">LIVE TASKS</text>
       <rect x="172" y="368" width="120" height="34" rx="8" fill="#19333f"/><text x="189" y="390">APPROVALS</text>

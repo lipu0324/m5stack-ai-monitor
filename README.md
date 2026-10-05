@@ -6,7 +6,7 @@
 
 **让 AI 在电脑里工作，让进度在桌面上发光。**
 
-把 M5Stack Core 一代变成 Codex / Hermes 的桌面状态屏。  
+把 M5Stack Core 一代变成 Codex / Hermes / OpenCode 的桌面状态屏。<br>
 运行任务、待审批命令、Token 图表、缓存命中、套餐额度与主机状态——抬眼就能看到。
 
 ![ESP32](https://img.shields.io/badge/ESP32-Core_1-36d6ed?style=flat-square)
@@ -25,11 +25,11 @@
 
 | 视角 | 你能看到什么 |
 | :--- | :--- |
-| **LIVE · 运行** | 正在工作的 Codex / Hermes 任务，当前动作、耗时、摘要与输入等待。 |
+| **LIVE · 运行** | 正在工作的 Codex / Hermes / OpenCode 任务，当前动作、耗时、摘要与输入等待。 |
 | **ACTION · 审批** | 待处理命令与按住确认进度；批准当前一次，或者拒绝。 |
 | **STATS · 用量** | 七日 Token 柱状图、输入 / 输出数、缓存命中率；切换查看 Codex 套餐窗口。 |
 | **HOST · 主机** | CPU / 内存实时双曲线、默认出口网卡收发速率、根磁盘占用、系统负载与开机时间。 |
-| **LINK · 来源** | Codex 桌面、Hermes CLI / Gateway 的采集健康度与连接状态。 |
+| **LINK · 来源** | 自动发现本机 Agent、查看采集健康度；按来源显示或隐藏任务与图表。 |
 
 设置使用独立入口：亮度、声音、重新配网、连接信息。普通切页不会进入设置，退出后回到原页面。
 
@@ -40,6 +40,8 @@
 </tr>
 </table>
 
+- **自动发现**：Codex、Hermes、OpenCode，以及 Claude Code、Gemini CLI、Aider、Goose、Amp、Cursor Agent；来源页按 B 选择、长按 C 显示/隐藏，设备保存选择。
+- **OpenCode 接入**：优先读取本机 v2 会话状态与 SQLite 用量，兼容 v1 只读状态接口；其审批与提问在电脑处理。其他 Agent 当前提供安装/数据存在与进程在线检测。
 - **两秒刷新**：正常网络下持续轮询，HTTP 在独立任务中运行，按钮与绘制不等待网络超时。
 - **主机趋势**：两秒采样一次，最多保留六十个点；CPU / 内存按 0–100% 绘图，网络纵轴自动缩放。
 - **声音有含义**：完成一声，等待操作两声，失败三声；首次连接不重播历史提醒。
@@ -47,24 +49,39 @@
 - **手机配网**：临时热点、屏幕随机密码、浏览器配置，Wi-Fi 与监视 Token 存入 NVS。
 - **图形界面**：深色卡片、来源徽标、柱状图、额度环与进度条，搭配切页动画。
 
+### 来源支持范围
+
+| 来源 | 任务状态 | 用量 / 套餐 | 设备响应审批 |
+|---|---|---|---|
+| Codex Desktop | 实时状态、审批、输入等待 | Token、缓存、账户额度 | 命令 once / deny |
+| Hermes | Desktop 实时与 CLI/Gateway 插件 | 本机会话 Token / 缓存；额度未知 | 支持的命令 once / deny |
+| OpenCode | v2 HTTP + 明确持久化结果；v1 HTTP 状态 | v2 本机会话 Token / 缓存；额度未知 | 在电脑处理 |
+| Claude Code / Gemini CLI / Aider / Goose / Amp / Cursor Agent | 安装或本地数据发现、进程在线；任务未知 | 未接入 | 在电脑处理 |
+
+<p align="center"><img src="docs/assets/sources.png" width="400" alt="实机自动发现 Codex、Hermes、OpenCode，可选择显示或隐藏"/></p>
+
+OpenCode 默认自动定位同一用户进程的本地监听端口，服务密码仅在主机使用。自定义路径和地址见 [使用手册](docs/USAGE.md#agent-自动发现与-opencode)。
+
 ## 🧠 小设备，本机大脑
 
 ```mermaid
 flowchart LR
     C[Codex Desktop<br/>IPC + SQLite] --> S[Python 状态桥接服务]
     H[Hermes Desktop / CLI / Gateway<br/>WebSocket + SQLite + 插件] --> S
+    O[OpenCode 本机 HTTP + SQLite] --> S
+    D[Agent 自动发现<br/>安装 / 同用户进程] --> S
     U[Codex 账户接口<br/>Token / 套餐窗口] --> S
     S -->|Wi-Fi · HTTP · Bearer Token| M[M5Stack Core 1<br/>状态 / 图表 / 提醒]
     M -->|明确的 once / deny| S
 ```
 
-屏幕拿到的是整理后的状态与指标。Codex / Hermes 账号凭据留在主机；设备使用独立的监视 Token。
+屏幕拿到的是整理后的状态与指标。Codex / Hermes / OpenCode 账号凭据留在主机；设备使用独立的监视 Token。
 
 ## 🚀 快速开始
 
 当前面向 **Linux + systemd 用户服务**，主机与设备需要在同一可信局域网。已在 **M5Stack Core 一代、ESP32、4MB Flash** 上验证；不使用 PSRAM。
 
-需要 Python 3.12、PlatformIO、原生 C++ 编译器，以及已经登录运行的 Codex Desktop 和 / 或 Hermes。图形诊断工具另需 Pillow。
+需要 Python 3.12、PlatformIO、原生 C++ 编译器，以及已经登录运行的 Codex Desktop、Hermes 和 / 或 OpenCode。图形诊断工具另需 Pillow。
 
 ### 1. 安装主机服务
 
@@ -117,8 +134,8 @@ pio run -t upload --upload-port "$AI_MONITOR_PORT"
 | 操作 | 结果 |
 | :--- | :--- |
 | **A / C 短按** | 上一页 / 下一页，循环只包含五个监视页面。 |
-| **B 短按** | 切换任务 / 审批；用量页切换 Codex / Hermes；主机页切换资源 / 网络。 |
-| **C 长按 0.8 秒** | 运行页查看任务详情；用量页切换 Token / 套餐视图。 |
+| **B 短按** | 切换任务 / 审批；用量页切换已显示来源；来源页选择来源；主机页切换资源 / 网络。 |
+| **C 长按 0.8 秒** | 运行页查看任务详情；用量页切换 Token / 套餐视图；来源页显示 / 隐藏。 |
 | **B 长按 2 秒** | 进入设置 / 返回原页面。 |
 | **设置内 A / C、B** | 选择项目、调整；也可选择“返回监视”退出。 |
 | **审批页 C 长按 2 秒** | 批准选中命令的**当前这一次**。 |
@@ -134,6 +151,7 @@ pio run -t upload --upload-port "$AI_MONITOR_PORT"
 | Codex 会话输入 / 输出 / 缓存 | 当前加载的本机桌面会话累计值。缓存命中率 = 缓存输入 ÷ 总输入。 |
 | Codex 七日 Token / 套餐额度 | 来自已登录账户接口，可包含其他设备使用，存在更新延迟。Token 数与额度百分比独立展示。 |
 | Hermes 用量 / 缓存 | 来自本地会话数据库。输入分母含非缓存输入、缓存读取与缓存写入；命中分子为缓存读取。 |
+| OpenCode v2 用量 / 缓存 | 本机全部会话累计字段；输入含缓存读取与写入，七日图按会话开始日归属；套餐额度未知。 |
 | Hermes 七日图 | 整个会话用量按会话开始日归属，当前日期边界为 UTC+8；不是逐调用日统计。 |
 | Hermes 套餐额度 | 当前无可靠来源，显示不可用，不以 0% 替代未知。 |
 
@@ -152,7 +170,7 @@ Codex 状态使用**现有 Desktop IPC**；独立 `codex app-server` 仅用于�
 ## 🧪 验证与诊断
 
 ```bash
-# 本地逻辑与真实导航状态机：40 项测试
+# 本地逻辑与真实导航状态机：52 项测试
 .venv/bin/python -m unittest discover -s tests -v
 
 # 读取已有本机来源，不发送模型消息
@@ -164,6 +182,8 @@ Codex 状态使用**现有 Desktop IPC**；独立 `codex app-server` 仅用于�
 ```
 
 已实机验证设置页进出、服务断开与恢复、Wi-Fi 保留配置、中文图形界面，以及真实等待输入提示 / 两声提醒 / 响铃后持续同步。远程审批的精确请求与防重放已通过测试；真实待审批请求的端到端验收仍待完成。**八小时观察已取消**，不将短测包装为长期稳定性结论。
+
+`tools/review-agents-ui.py` 可短测来源发现、隐藏、用量切换和 NVS 保存，不启动 AI 任务。
 
 `tools/check-http-recovery.py` 可短测主机双请求、切页和播放声音后的同步，会播放三声测试音（遵循静音设置）；原生接收器测试需要先执行 `pio run` 安装 ArduinoJson。
 

@@ -18,12 +18,12 @@ def request(source='all',token=None):
 a=request()
 assert a['version']==1
 assert time.time()-a['observed_at']<5
-assert a['sources']['codex']['live']
-print('Authenticated snapshot: OK; Codex desktop IPC: live')
-for s in ('codex','hermes'):
+detected=[key for key,value in a['sources'].items() if value.get('detected')]
+print('Authenticated snapshot: OK; discovered:', ', '.join(detected))
+for s in ('codex','hermes','opencode'):
     p=request(s)
     assert all(t['source']==s for t in p['tasks'])
-    print(s, 'tasks:',p['total'], 'source:',p['sources'][s])
+    print(s, 'tasks:',p['total'], 'online:',p['sources'][s]['online'], 'live:',p['sources'][s]['live'], 'metrics:',p['metrics'].get(s,{}).get('available',False))
 try:
     request(token='invalid')
     raise AssertionError('bad token accepted')

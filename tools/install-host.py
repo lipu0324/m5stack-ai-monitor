@@ -40,7 +40,7 @@ if shutil.which('hermes'):
         answer = control.reload_gateway_plugins(HOME / '.hermes')
         print('Gateway hot reload:', bool(answer and answer.get('reloaded')))
 else:
-    print('Hermes CLI not found; continuing with Codex monitoring.')
+    print('Hermes CLI not found; continuing with available agents.')
 unit_dir = HOME / '.config/systemd/user'
 unit_dir.mkdir(parents=True, exist_ok=True)
 (unit_dir / 'ai-monitor.service').write_text(f'''[Unit]

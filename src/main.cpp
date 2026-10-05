@@ -10,6 +10,7 @@
 #include <type_traits>
 #include "navigation.h"
 #include "response_reader.h"
+#include "agents.h"
 
 // Only the network worker touches HTTP; only loop() touches display, NVS and buttons.
 enum Status : uint8_t { IDLE, RUNNING, APPROVAL, WAIT_INPUT, DONE, FAILED, INTERRUPTED, UNKNOWN };
@@ -17,13 +18,13 @@ const char* states[] = {"idle","running","waiting_approval","waiting_input","com
 const char* labels[] = {"空闲","运行中","等待审批","等待输入","已完成","失败","已中断","未知"};
 const char* pages[] = {"运行列表","待审批","用量图表","来源","主机状态","设置"};
 struct Task {
-  char id[96]{}, title[193]{}, summary[289]{}, action[145]{}, kind[25]{};
+  char id[96]{}, title[193]{}, summary[289]{}, action[145]{}, kind[25]{}, source[17]{};
   Status status = UNKNOWN;
   uint32_t started=0, ended=0, updated=0;
   bool waitSupported=false;
 };
-struct Event { char id[24]{}, title[193]{}, source[8]{}; Status status=UNKNOWN; uint32_t at=0; };
-struct Approval { char id[25]{}, title[193]{}, command[769]{}, source[8]{}; bool canApprove=false, canDeny=false; };
+struct Event { char id[24]{}, title[193]{}, source[17]{}; Status status=UNKNOWN; uint32_t at=0; };
+struct Approval { char id[25]{}, title[193]{}, command[769]{}, source[17]{}; bool canApprove=false, canDeny=false; };
 struct Quota { char label[33]{}; float used=0; uint32_t reset=0, minutes=0; };
 struct Metric {
   bool available=false, hitAvailable=false, dailyAvailable=false, quotaAvailable=false;
@@ -42,12 +43,16 @@ struct HostMetric {
   char interface[25]{},detail[49]{};
   HostSample history[60];
 };
+struct SourceInfo {
+  bool detected=false,online=false,healthy=false,live=false,taskSupport=false;
+  uint8_t processes=0;char detail[97]{};
+};
 struct Snapshot {
-  Task tasks[10]; Event events[20]; Approval approvals[10]; Metric metrics[2];
+  Task tasks[10]; Event events[20]; Approval approvals[10]; Metric metrics[3];
   int approvalCount=0;
   int count=0, eventCount=0, total=0, offset=0, counts[8]{};
-  bool online[2]{}, healthy[2]{}, live[2]{};
-  char detail[2][145]{}, cursor[160]{};
+  SourceInfo agents[AgentSelection::COUNT];
+  char cursor[160]{};
   uint32_t received=0, observed=0, generated=0, sequence=0;
   HostMetric host;
 };
@@ -66,7 +71,7 @@ SemaphoreHandle_t guard;
 Snapshot cache[1], view;
 // Reserve the parse arena once, before Wi-Fi/speaker/display allocations.
 // A later 32KB per-request allocation can fail on a fragmented non-PSRAM heap.
-DynamicJsonDocument networkJson(32768);
+DynamicJsonDocument networkJson(0);
 Snapshot& overview=view;
 Config activeConfig, candidateConfig;
 bool candidatePending=false, candidateValid=false, apActive=false, closePortal=false;
@@ -91,6 +96,9 @@ String pendingApprovalId, pendingApprovalChoice, controlResult, controlToast;
 uint32_t controlToastUntil=0;
 bool controlPending=false;
 int metricSource=0, metricMode=0;
+AgentSelection agentSelection;
+int sourceSelection=0;
+Metric unknownMetric;
 int hostMode=0;
 bool requestedHost=false;
 String selectedApprovalId;
@@ -159,7 +167,7 @@ bool readHttpJson(HTTPClient& http,WiFiClient& client,String& error,bool hostBod
   return false;
 }
 
-bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,String& error,bool includeHost) {
+bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,String& error,bool includeHost,uint16_t hidden) {
   WiFiClient client;
   HTTPClient http;
   String base=cfg.url;
@@ -176,6 +184,8 @@ bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,Strin
   }
   String url=base+"/api/v1/snapshot?view=active&source="+(source==1?"codex":source==2?"hermes":"all");
   if(source==0) url+="&device="+String((uint32_t)ESP.getEfuseMac(),HEX)+"&uptime="+String(millis()/1000)+"&heap="+String(ESP.getFreeHeap())+"&min_heap="+String(ESP.getMinFreeHeap());
+  String enabled;for(int i=0;i<AgentSelection::COUNT;i++) if(!(hidden & (1U<<i))) {if(enabled.length()) enabled+=",";enabled+=AgentSelection::id(i);}
+  url+="&agents="+(enabled.length()?enabled:String("none"));
   if(cursor.length()) url+="&cursor="+cursor;
   http.setReuse(false);http.setConnectTimeout(2000); http.setTimeout(2500);
   if(!http.begin(client,url)) {error="服务地址无效";return false;}
@@ -196,16 +206,17 @@ bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,Strin
   out.generated=doc["generated_at"]|0U;out.observed=doc["observed_at"]|0U;
   out.sequence=doc["event_sequence"]|0U;
   for(int i=0;i<8;i++) out.counts[i]=doc["counts"][states[i]]|0;
-  for(int i=0;i<2;i++) {
-    JsonObject h=doc["sources"][i==0?"codex":"hermes"];
-    out.online[i]=h["online"]|false;out.healthy[i]=h["healthy"]|false;out.live[i]=h["live"]|false;
-    copyText(out.detail[i],h["detail"]|"");
+  for(int i=0;i<AgentSelection::COUNT;i++) {
+    JsonObject h=doc["sources"][AgentSelection::id(i)];SourceInfo& x=out.agents[i];
+    x.online=h["online"]|false;x.healthy=h["healthy"]|false;x.live=h["live"]|false;
+    x.detected=h["detected"]|x.online;x.taskSupport=strcmp(h["capability"]|"tasks","tasks")==0;
+    x.processes=h["process_count"]|0;copyText(x.detail,h["detail"]|"");
   }
   copyText(out.cursor,doc["next_cursor"]|"");
   for(JsonObject t:doc["tasks"].as<JsonArray>()) {
     Task& x=out.tasks[out.count++];
     copyText(x.id,t["id"]|"");copyText(x.title,t["title"]|"");copyText(x.summary,t["summary"]|"");
-    copyText(x.action,t["action"]|"");copyText(x.kind,t["kind"]|"");
+    copyText(x.action,t["action"]|"");copyText(x.kind,t["kind"]|"");copyText(x.source,t["source"]|"");
     x.status=parseStatus(t["status"]|"unknown");x.started=t["started_at"]|0U;
     x.ended=t["ended_at"]|0U;x.updated=t["updated_at"]|0U;x.waitSupported=t["wait_supported"]|false;
   }
@@ -219,8 +230,8 @@ bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,Strin
     copyText(x.id,a["id"]|"");copyText(x.title,a["title"]|"");copyText(x.command,a["command"]|"");copyText(x.source,a["source"]|"");
     x.canApprove=a["can_approve"]|false;x.canDeny=a["can_deny"]|false;
   }
-  for(int i=0;i<2;i++) {
-    JsonObject m=doc["metrics"][i==0?"codex":"hermes"];Metric& x=out.metrics[i];
+  for(int i=0;i<3;i++) {
+    JsonObject m=doc["metrics"][AgentSelection::id(i)];Metric& x=out.metrics[i];
     x.available=m["available"]|false;x.input=m["input"]|uint64_t(0);x.output=m["output"]|uint64_t(0);x.cached=m["cached"]|uint64_t(0);x.total=m["total"]|uint64_t(0);
     x.hitAvailable=!m["hit_percent"].isNull();x.hit=m["hit_percent"]|0.0f;
     x.dailyAvailable=m["daily"].is<JsonArray>();int d=0;
@@ -274,7 +285,7 @@ void networkWorker(void*) {
     if(pending) {working=candidateConfig;candidatePending=false;testing=true;}
     else if(!testing) working=activeConfig;
     String cursor=requestedCursor[0];
-    bool includeHost=requestedHost;
+    bool includeHost=requestedHost;uint16_t hidden=agentSelection.hidden;
     bool act=controlPending;String approvalId=pendingApprovalId,choice=pendingApprovalChoice;
     unlock();
     if(pending) {candidateError="";WiFi.disconnect(false);trying=false;retryAt=millis();backoff=1000;}
@@ -306,10 +317,10 @@ void networkWorker(void*) {
       } else result="审批服务地址无效";
       lock();controlResult=result;unlock();
     }
-    bool ok=fetch(working,0,cursor,*next,error,includeHost);
+    bool ok=fetch(working,0,cursor,*next,error,includeHost,hidden);
     lock();networkStackFree=uxTaskGetStackHighWaterMark(nullptr);unlock();
     if(ok) {
-      lock();if(!next->host.received) next->host=cache[0].host;cache[0]=*next;
+      lock();if(hidden!=agentSelection.hidden || cursor!=requestedCursor[0]) {unlock();retryAt=millis();continue;}if(!next->host.received) next->host=cache[0].host;cache[0]=*next;
       if(testing) {activeConfig=working;candidateValid=true;testing=false;closePortal=true;}
       netMessage="已连接";unlock();
       backoff=1000;retryAt=millis()+2000;
@@ -366,6 +377,18 @@ void adjustSetting() {
   dirty=true;
 }
 
+uint16_t agentColor(int index) {return index==0?0x3E7D:index==1?0x4EF3:index==2?0xC33F:0xFE80;}
+void detectedAgents(bool* detected) {for(int i=0;i<AgentSelection::COUNT;i++) detected[i]=view.agents[i].detected;}
+void nextMetric() {bool detected[AgentSelection::COUNT];detectedAgents(detected);metricSource=agentSelection.next(metricSource,detected,true);dirty=true;}
+void nextSource() {bool detected[AgentSelection::COUNT];detectedAgents(detected);int next=agentSelection.next(sourceSelection,detected);if(next>=0) sourceSelection=next;dirty=true;}
+void toggleSource() {
+  if(!view.agents[sourceSelection].detected) return;
+  lock();agentSelection.toggle(sourceSelection);requestedCursor[0]="";unlock();
+  prefs.putUShort("agentHidden",agentSelection.hidden);selectedId[0]="";selection[0]=0;
+  alertsInitialized=false;beepsRemaining=0;M5.Speaker.stop();
+  controlToast=String(AgentSelection::label(sourceSelection))+(agentSelection.enabled(sourceSelection)?" 已显示":" 已隐藏");controlToastUntil=millis()+2000;dirty=true;
+}
+
 void selectNext() {
   textPage=0;
   if(page==0) {
@@ -373,7 +396,8 @@ void selectNext() {
     else if(!view.cursor[0] && view.total<=view.count) {selection[0]=0;if(view.count) selectedId[0]=view.tasks[0].id;}
     else {lock();requestedCursor[0]=String(view.cursor);cache[0].count=0;cache[0].received=0;unlock();selection[0]=0;selectedId[0]="";}
   } else if(page==1 && view.approvalCount) {selection[1]=(selection[1]+1)%view.approvalCount;selectedApprovalId=view.approvals[selection[1]].id;}
-  else if(page==2) metricSource=(metricSource+1)%2;
+  else if(page==2) nextMetric();
+  else if(page==3) nextSource();
   else if(page==4) hostMode=(hostMode+1)%2;
   dirty=true;
 }
@@ -416,6 +440,9 @@ void render() {
   uint32_t now=millis();
   uint32_t displayReceived=view.received;
   bool stale=!displayReceived || now-displayReceived>10000 || (view.generated>view.observed && view.generated-view.observed>10);
+  bool detected[AgentSelection::COUNT];detectedAgents(detected);
+  if(sourceSelection<0 || !detected[sourceSelection]) {int next=agentSelection.next(-1,detected);if(next>=0) sourceSelection=next;}
+  if(metricSource<0 || !detected[metricSource] || !agentSelection.enabled(metricSource)) metricSource=agentSelection.next(-1,detected,true);
   if(page==0) {
     bool found=false;
     for(int i=0;i<view.count;i++) if(selectedId[0]==view.tasks[i].id) {selection[0]=i;found=true;break;}
@@ -443,7 +470,7 @@ void render() {
   else if(alertsInitialized && overview.sequence> alertsSequence) {
     for(int i=overview.eventCount-1;i>=0;i--) {
       Event& e=overview.events[i];uint32_t id=strtoul(e.id,nullptr,10);
-      if(id<=alertsSequence) continue;
+      if(id<=alertsSequence || !agentSelection.enabled(AgentSelection::index(e.source))) continue;
       int count=e.status==FAILED?3:(e.status==APPROVAL || e.status==WAIT_INPUT)?2:e.status==DONE?1:0;
       if(!muted) beepsRemaining=min(beepsRemaining+count,6);
     }
@@ -461,15 +488,21 @@ void serialDiagnostics() {
       Serial.printf("INFO {\"uptime\":%lu,\"heap\":%u,\"min_heap\":%u,\"max_heap_block\":%u,\"network_stack_free\":%lu,\"wifi\":%d,\"ap\":%s,\"page\":%d,\"tasks\":%d,\"visible_tasks\":%d,\"events\":%d,\"host_samples\":%d,\"host_available\":%s,\"host_age_ms\":%lu,\"age_ms\":%lu,\"message\":\"%s\"}\n",millis()/1000,ESP.getFreeHeap(),ESP.getMinFreeHeap(),ESP.getMaxAllocHeap(),stackFree,WiFi.status(),apActive?"true":"false",page,total,view.count,view.eventCount,view.host.count,view.host.available?"true":"false",view.host.received?millis()-view.host.received:0,received?millis()-received:0,message.c_str());
     } else if(line=="HTTP_DIAG") {
       lock();uint32_t sr=snapshotReads,hr=hostReads,se=snapshotReadErrors,he=hostReadErrors,expected=bodyExpected,received=bodyReceived;unlock();
-      Serial.printf("HTTP {\"snapshot_reads\":%lu,\"host_reads\":%lu,\"snapshot_errors\":%lu,\"host_errors\":%lu,\"expected\":%lu,\"received\":%lu}\n",sr,hr,se,he,expected,received);
+      Serial.printf("HTTP {\"snapshot_reads\":%lu,\"host_reads\":%lu,\"snapshot_errors\":%lu,\"host_errors\":%lu,\"expected\":%lu,\"received\":%lu,\"json_capacity\":%u}\n",sr,hr,se,he,expected,received,networkJson.capacity());
     } else if(line.startsWith("TAB ")) {changePage(line.substring(4).toInt());render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
     else if(line=="SETTINGS") {if(page!=Navigation::SETTINGS) toggleSettings();render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
     else if(line=="BACK") {if(page==Navigation::SETTINGS) leaveSettings();render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
     else if(line=="NEXT_SETTING") {if(page==Navigation::SETTINGS) navigation.selectSetting(1);dirty=true;render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
     else if(line=="SELECT_BACK") {if(page==Navigation::SETTINGS) {setting=4;adjustSetting();}render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
-    else if(line=="METRIC") {metricSource=(metricSource+1)%2;dirty=true;render();Serial.println("UI metric switched");}
+    else if(line=="METRIC") {nextMetric();dirty=true;render();Serial.println("UI metric switched");}
     else if(line=="MODE") {metricMode=(metricMode+1)%2;dirty=true;render();Serial.println("UI metric mode switched");}
     else if(line=="DETAIL") {textPage=!textPage;dirty=true;render();Serial.println("UI detail switched");}
+    else if(line=="SOURCE_NEXT") {nextSource();render();Serial.printf("UI source=%d hidden=%u\n",sourceSelection,agentSelection.hidden);}
+    else if(line=="SOURCE_TOGGLE") {toggleSource();render();Serial.printf("UI source=%d hidden=%u\n",sourceSelection,agentSelection.hidden);}
+    else if(line=="AGENTS") {
+      Serial.printf("AGENTS {\"hidden\":%u,\"selected\":%d,\"metric\":%d,\"detected\":[",agentSelection.hidden,sourceSelection,metricSource);
+      bool comma=false;for(int i=0;i<AgentSelection::COUNT;i++) if(view.agents[i].detected) {Serial.printf("%s\"%s\"",comma?",":"",AgentSelection::id(i));comma=true;}Serial.println("]}");
+    }
     else if(line=="HOST_MODE") {hostMode=(hostMode+1)%2;dirty=true;render();Serial.println("UI host mode switched");}
     else if(line=="PERF") {Serial.printf("PERF {\"strip_buffer\":%s,\"frame_us\":%lu}\n",canvasReady?"true":"false",frameMicros);}
     else if(line=="TEST_SOUND") {if(!muted) beepsRemaining=3;} else if(line=="SCREEN") {
@@ -481,18 +514,22 @@ void serialDiagnostics() {
     line="";
   }
 }
+// Defer allocation until Arduino has initialized the full heap. Global constructors
+// can run with too little contiguous memory after the static Snapshot grows.
 void setup() {
+  networkJson=DynamicJsonDocument(32768);
   auto cfg=M5.config();cfg.clear_display=true;M5.begin(cfg);
   Serial.begin(115200);Serial.setDebugOutput(false);esp_log_level_set("*",ESP_LOG_NONE);
   // Arduino 2.0.16 log_printf spins until TX is idle. A long SCREEN stream
   // keeps TX busy and can starve IDLE0 when WiFiClient logs an error.
   // Only our structured diagnostic replies use UART; errors remain on the LCD.
-  Serial.println("AI Monitor boot v4 host UI");
+  Serial.println("AI Monitor boot v5 agents UI");
   M5.Display.setRotation(1);M5.Display.fillScreen(UI_BG);
   // 51KB RGB565 strip, instead of a 154KB full-frame allocation on a non-PSRAM Core.
   canvas.setColorDepth(16);canvas.setPsram(false);
   canvasReady=canvas.createSprite(320,80)!=nullptr;
   prefs.begin("ai-monitor",false);
+  agentSelection.hidden=prefs.getUShort("agentHidden",0);
   brightness=prefs.getUChar("brightness",128);muted=prefs.getBool("muted",false);
   M5.Display.setBrightness(brightness);M5.Speaker.setVolume(32);
   guard=xSemaphoreCreateMutex();readConfig(activeConfig);
@@ -513,7 +550,7 @@ void loop() {
   if(!acSuppress && page==1) {
     if(M5.BtnC.pressedFor(2000) && !cLong) {cLong=true;queueApproval(true);}
     if(M5.BtnA.pressedFor(2000) && !aLong) {aLong=true;queueApproval(false);}
-  } else if(!acSuppress && (page==0 || page==2) && M5.BtnC.pressedFor(800) && !cLong) {cLong=true;if(page==0) textPage=(textPage+1)%2;else metricMode=(metricMode+1)%2;dirty=true;}
+  } else if(!acSuppress && (page==0 || page==2 || page==3) && M5.BtnC.pressedFor(800) && !cLong) {cLong=true;if(page==0) textPage=(textPage+1)%2;else if(page==2) metricMode=(metricMode+1)%2;else toggleSource();dirty=true;}
   if(M5.BtnB.pressedFor(2000) && !bLong) {
     bLong=true;
     toggleSettings();

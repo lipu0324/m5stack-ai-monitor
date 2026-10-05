@@ -20,6 +20,8 @@ from collectors import CodexCollector, HermesCollector
 from model import EventStore, STATES, sort_tasks
 from usage import AccountUsage
 from host_stats import HostStats
+from agents import AgentDiscovery, IDS
+from opencode import OpenCodeCollector
 
 LOG = logging.getLogger('ai-monitor')
 
@@ -55,6 +57,9 @@ class Monitor:
         self.ipc = CodexIPC(config['codex_home'])
         self.collectors = {'codex': CodexCollector(config['codex_home'], self.ipc),
                            'hermes': HermesCollector(config['hermes_home'], config['events_dir'])}
+        self.discovery = AgentDiscovery()
+        self.discovery.scan()
+        self.collectors['opencode'] = OpenCodeCollector(self.discovery, config)
         self.store = EventStore(Path(config['state_dir']) / 'monitor-state.json')
         self.tasks = []
         self.sources = {}
@@ -85,6 +90,7 @@ class Monitor:
             task=next((t for t in self.tasks if self.approval_id(t)==approval_id and t.get('_approval')),None)
             if not task:raise ValueError('request_expired')
             target=dict(task['_approval'])
+            if target['source'] not in ('codex','hermes'):raise ValueError('unsupported_approval_source')
             if choice not in target['choices']:raise ValueError('invalid_decision')
             if choice=='once' and (not target['command'] or target.get('truncated')):raise ValueError('command_requires_desktop_review')
             self.inflight.add(approval_id)
@@ -106,20 +112,22 @@ class Monitor:
         codex={'available':connected and inputs>0,'input':inputs,'output':output,'cached':cached,'total':inputs+output,
                'hit_percent':100*cached/inputs if inputs else None,'scope':'已加载桌面会话累计；每日为账户统计'}
         codex.update(self.account_usage.snapshot())
-        return {'codex':codex,'hermes':self.collectors['hermes'].metrics}
+        return {'codex':codex,'hermes':self.collectors['hermes'].metrics,
+                'opencode':self.collectors['opencode'].metric_snapshot()}
 
     def poll(self):
         self.host.sample()
-        tasks, sources = [], {}
+        tasks, sources = [], {key:dict(value) for key,value in self.discovery.scan().items()}
         for name, collector in self.collectors.items():
             try:
                 found, health = collector.collect()
                 tasks.extend(found)
-                sources[name] = health
+                sources[name].update(health)
+                if found or health.get("online"):
+                    sources[name]["detected"] = True
             except Exception:
                 LOG.exception('collector failed: %s', name)
-                sources[name] = {'online': False, 'healthy': False, 'live': False,
-                                 'wait_supported': False, 'detail': '采集失败'}
+                sources[name].update(online=False, healthy=False, live=False, wait_supported=False, detail='采集失败')
         with self.lock:
             self.tasks = sort_tasks(tasks)
             self.sources = sources
@@ -133,19 +141,23 @@ class Monitor:
     def start(self):
         self.ipc.start()
         self.account_usage.start()
+        self.collectors['opencode'].thread.start()
         self.poll()
         def work():
             while not self.stop.wait(2):
                 self.poll()
         threading.Thread(target=work, name='status-collector', daemon=True).start()
 
-    def snapshot(self, source='all', cursor='', view='all', host=False):
-        if source not in ('all', 'codex', 'hermes'):
+    def snapshot(self, source='all', cursor='', view='all', host=False, agents=None):
+        if source not in ('all', *IDS):
             raise ValueError('invalid source')
         if view not in ('all','active'):raise ValueError('invalid view')
+        allowed = set(IDS) if agents is None else set(agents)
+        if not allowed.issubset(IDS):raise ValueError('invalid agents')
+        if source != 'all':allowed.intersection_update([source])
         anchor = decode_cursor(cursor) if cursor else None
         with self.lock:
-            tasks = [t for t in self.tasks if source == 'all' or t['source'] == source]
+            tasks = [t for t in self.tasks if t['source'] in allowed]
             if view=='active':tasks=[t for t in tasks if t['status'] in ('running','waiting_approval','waiting_input')]
             index = 0
             if anchor:
@@ -159,9 +171,9 @@ class Monitor:
                     'observed_at': self.observed_at, 'sources': self.sources, 'device': self.device,
                     'counts': counts, 'total': len(tasks), 'offset': index, 'tasks': page,
                     'next_cursor': encode_cursor(page[-1]['id']) if page and index + len(page) < len(tasks) else '',
-                    'approvals':self.approvals(),'metrics':self.metrics(),
+                    'approvals':[a for a in self.approvals() if a['source'] in allowed],'metrics':{k:v for k,v in self.metrics().items() if k in allowed},
                     'event_sequence': self.store.sequence,
-                    'events': [e for e in reversed(self.store.events) if source == 'all' or e['source'] == source]}
+                    'events': [e for e in reversed(self.store.events) if e['source'] in allowed]}
             if host:
                 result['host'] = self.host.snapshot()
             return result
@@ -195,6 +207,11 @@ class Handler(BaseHTTPRequestHandler):
             self.response(401, {'error': 'unauthorized'})
             return
         url = urlsplit(self.path)
+        if url.path == '/api/v1/agents':
+            with self.server.monitor.lock:
+                agents = [dict(v) for v in self.server.monitor.sources.values() if v.get('detected')]
+            self.response(200, {'version':1, 'agents':agents})
+            return
         if url.path == '/api/v1/host':
             self.response(200, {'version': 1, 'host': self.server.monitor.host.snapshot()})
             return
@@ -215,7 +232,9 @@ class Handler(BaseHTTPRequestHandler):
                             self.server.monitor.device = dict(stats,id=device,last_seen=int(time.time()))
                 except (ValueError,KeyError,IndexError):
                     pass
-            self.response(200, self.server.monitor.snapshot(query.get('source', ['all'])[0], query.get('cursor', [''])[0],query.get('view',['all'])[0],host=include_host=='1'))
+            selection = query.get('agents', [None])[0]
+            allowed = None if selection is None or selection == 'all' else [] if selection == 'none' else selection.split(',')
+            self.response(200, self.server.monitor.snapshot(query.get('source', ['all'])[0], query.get('cursor', [''])[0],query.get('view',['all'])[0],host=include_host=='1',agents=allowed))
         except ValueError:
             self.response(400, {'error': 'invalid_query'})
 
@@ -290,6 +309,7 @@ def main():
         monitor.stop.set()
         monitor.ipc.stop.set()
         monitor.account_usage.stop.set()
+        monitor.collectors['opencode'].stop.set()
         threading.Thread(target=server.shutdown, daemon=True).start()
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
@@ -300,6 +320,7 @@ def main():
         server.server_close()
         monitor.store.save()
         monitor.account_usage.stop.set()
+        monitor.collectors['opencode'].stop.set()
         if monitor.account_usage.thread.is_alive():monitor.account_usage.thread.join(timeout=3)
         if zeroconf:
             zeroconf.close()

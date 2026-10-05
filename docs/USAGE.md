@@ -1,20 +1,21 @@
 # M5Stack AI 监视器
 
-Core 一代通过局域网 Wi-Fi 显示当前正在运行的 Codex/Hermes 任务、命令审批和用量图表。
+Core 一代通过局域网 Wi-Fi 显示当前正在运行的 Codex/Hermes/OpenCode 任务、命令审批和用量图表。
 
 ## 页面与按钮
 
 | 页面 | 内容 |
 |---|---|
-| 运行列表 | 只显示运行中、等待审批、等待输入；C/H 分别代表 Codex/Hermes |
+| 运行列表 | 只显示运行中、等待审批、等待输入；C/H/O 分别代表 Codex/Hermes/OpenCode |
 | 待审批 | 当前可处理的命令审批及命令内容 |
 | 用量图表 | 近七日 Token 柱状图、输入/输出数、缓存命中率；可切换套餐额度进度条 |
-| 来源 | Codex 与 Hermes 的在线情况和采集路径 |
+| 来源 | 自动发现来源、在线情况与采集能力；B 选择，长按 C 显示/隐藏 |
 | 主机状态 | CPU / 内存两分钟双曲线，网络 RX/TX 自动缩放曲线，磁盘占用、系统负载与开机时间；B 切换资源 / 网络 |
 | 设置（独立入口） | 亮度、声音、重新配网、连接信息、返回监视 |
 
-- A/C 短按：在五个监视页面之间前后切换，循环不包含设置。B：切换任务/审批；用量页切换 Codex/Hermes；主机页切换资源/网络。
+- A/C 短按：在五个监视页面之间前后切换，循环不包含设置。B：切换任务/审批；用量页切换已显示的来源；主机页切换资源/网络。
 - 运行页长按 C 0.8 秒：切换所选任务详情。
+- **来源页：B 选择来源，长按 C 0.8 秒显示/隐藏。** 选择保存到 NVS，筛选运行、审批、图表与声音；A/C 短按仍切页，长按 B 仍进入设置。允许全部隐藏，新发现的来源默认显示。
 - 用量页长按 C 0.8 秒：切换 Token 图表与套餐额度。
 - **待审批页长按 C 两秒：仅批准当前这一次；长按 A 两秒：拒绝。**
 - 长按 B 两秒进入/返回设置，返回进入前的页面；设置中 A/C 选择，B 调整，也可选择“返回监视”后短按 B 退出。
@@ -69,7 +70,9 @@ Hermes 桌面连接只读取其本地桥接 Token，保留在主机内存中，�
 
 所有接口使用 `Authorization: Bearer <monitor token>`，供可信局域网访问。
 
-- `GET /api/v1/snapshot?source=all|codex|hermes&cursor=...&view=all|active`：版本 1；默认兼容历史视图，设备使用 active；每页最多十个任务、二十个事件，响应上限 16KB。
+- `GET /api/v1/snapshot?source=all|<agent-id>&agents=codex,hermes,opencode&cursor=...&view=all|active`：版本 1；默认兼容历史视图，设备使用 active；每页最多十个任务、二十个事件，响应上限 16KB。
+- `agents` 省略或 `all` 时包含所有来源，`none` 时不显示任何任务/指标/提醒；逗号列表仅允许已知 ID。它只筛选当前响应，不影响采集和其他设备。来源健康度始终完整返回，供前端自动发现。
+- `GET /api/v1/agents`：认证后的本机发现列表，含 `id/label/detected/installed/process_count/online/capability/healthy/live/detail`；不返回可执行路径、进程参数或凭据。
 - 响应增加 `metrics` 与 `approvals`。套餐百分比来自原始 quota 窗口；未知值保持未知。
 - `GET /api/v1/host`：认证后的独立主机快照，返回 CPU、内存、根磁盘、load、uptime、默认出口网卡 RX/TX 字节速率及 60 个历史点。设备仅在主机页（或从主机页进入设置时）额外请求该接口，不挤占 AI 快照的 16KB 上限；两者复用同一个 JSON 解析区。`snapshot?host=1` 也可选附带主机数据，仍受原 16KB 上限约束。
 - `POST /api/v1/approvals/respond`：JSON `{"id":"<opaque approval id>","choice":"once|deny"}`。目标来自服务当前待审批表，客户端不能指定任意任务或命令。
@@ -86,7 +89,7 @@ Hermes 桌面连接只读取其本地桥接 Token，保留在主机内存中，�
 .venv/bin/python tools/device.py screen --output .private/device-screen.ppm
 ```
 
-USB 只读界面诊断支持 `TAB 0..4`、`SETTINGS`、`BACK`、`NEXT_SETTING`、`SELECT_BACK`、`DETAIL`、`METRIC`、`MODE`、`HOST_MODE`、`HTTP_DIAG` 和 `PERF`，不触发审批决定。`PERF` 返回实际整帧绘制时间与分块缓冲启用情况。
+USB 只读界面诊断支持 `TAB 0..4`、`SETTINGS`、`BACK`、`NEXT_SETTING`、`SELECT_BACK`、`DETAIL`、`METRIC`、`MODE`、`HOST_MODE`、`HTTP_DIAG`、`AGENTS` 和 `PERF`，不触发审批决定。`PERF` 返回实际整帧绘制时间与分块缓冲启用情况。
 
 SDK 调试日志已关闭，避免 Arduino 2.0.16 在长串口截图期间遇到网络错误时忙等 TX-idle 并触发看门狗；连接错误仍通过屏幕和 INFO 报告。
 
@@ -108,3 +111,20 @@ LCD 截图可能包含临时热点密码，应保存到私有目录。测试不�
 固件不再使用 HTTPClient.getString() 分配整份正文，而是经有界接收器直接流式解析到预留 JSON arena。接收器按实际读取字节推进，先排空缓冲再判断断开；设置 2.5 秒无进展超时和 5 秒总正文期限，并让出网络任务 CPU。每次请求关闭连接，AI 与主机数据依次独立读取。完整 JSON 还需匹配 Content-Length，尾部仅允许空白；不完整数据不会替换最后有效快照。
 
 USB `HTTP_DIAG` 报告两种请求的读取次数、错误次数和最近正文 expected/received 字节数，不含 Token 或正文。`tools/check-http-recovery.py` 在播放三声测试音（遵循静音设置）后反复切换图表和设置，检查长度、数据时效与设备 uptime；仅做短测。
+
+
+## Agent 自动发现与 OpenCode
+
+自动识别 ID：`codex`、`hermes`、`opencode`、`claude`、`gemini`、`aider`、`goose`、`amp`、`cursor`。每五秒检查 PATH、已知本地安装/数据目录和同一用户的进程；只匹配可执行文件或 CLI 入口，避免把提示词中提及 agent 名称误判为在线。存在数据目录意味着发现过安装或数据，不保证可执行文件仍在；进程在线也不等于 AI 任务正在运行。其他六个来源目前只有发现与进程检测，任务和用量保持未知。
+
+OpenCode 采集在独立线程运行，与其他来源隔离。通过同一用户 OpenCode 进程拥有的监听 socket 找到 IPv4 本地端口，不扫描无关端口，不启动新服务。读取进程的 OpenCode 服务认证环境变量或 `~/.config/opencode/service.json` 的本地服务密码；密码不会离开主机。
+
+当前实测 v2.0.18：只读 `session_v2` 的会话投影及 Token 字段，结合 `GET /api/session/active` 与 `GET /api/session`。活动映射表示当前进程正在执行；结束只认 `idle_outcome=succeeded/failed/interrupted` 和更新的 `time_idle`，断线或静默不推断完成。根会话与子任务不重复展示。v2 审批请求按活动会话 location 查询只读 `GET /api/permission/request`；提问接口仅在该版本实际提供时启用。采集结果超过十秒标为过期，活动任务变为未知。旧 v1 使用 `GET /session/status`、`GET /session`、可用的权限/提问列表；v1 用量尚未接入。接口按版本降级，不使用修改会话、发送消息或回复审批的路由。
+
+OpenCode 累计输入 = 非缓存输入 + 缓存读取 + 缓存写入；命中率 = 缓存读取 / 累计输入。Token 包含数据库全部根/子会话，各记录的使用量仅统计一次；七日图按会话开始日归属，reasoning 字段不额外相加，套餐额度未知。OpenCode 的等待提示会出现在运行列表，审批/提问需在原电脑上处理。
+
+可选私有 `~/.config/ai-monitor/config.json` 字段：`opencode_db`（默认 `~/.local/share/opencode/opencode.db`）、`opencode_config`（默认 `~/.config/opencode`）、`opencode_url`（可选本地 HTTP 地址，例如 `http://127.0.0.1:4096`）。路径应写绝对路径；URL 仅接受 loopback、无账号密码与路径的 HTTP origin。修改后 `systemctl --user restart ai-monitor.service`。
+
+USB `AGENTS` 仅显示已发现 ID、选择和隐藏位掩码；`SOURCE_NEXT`/`SOURCE_TOGGLE` 操作与物理按钮相同的状态机，会保存设备显示偏好，不改变 AI 任务。可用 `tools/review-agents-ui.py` 短测并恢复原选择。
+
+接口语义参考 [OpenCode v2 活动会话](https://dev.opencode.ai/v2/docs/api/session/v2-session-active/)、[会话列表与 Token 字段](https://dev.opencode.ai/v2/docs/api/session/v2-session-list/)、[审批列表](https://dev.opencode.ai/v2/docs/api/permission/v2-permission-request-list/)；实际接入以本机 API 与 schema 验证为准。

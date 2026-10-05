@@ -89,9 +89,9 @@ void taskPage() {
   label("等待操作",186,47,UI_DIM);label(String(view.counts[APPROVAL]+view.counts[WAIT_INPUT]),278,45,UI_AMBER,16);
   if(!view.received || !view.count) {emptyState(view.received?"所有任务已空闲":"正在获取任务",view.received?"新任务会自动出现在这里":"连接成功后自动同步",view.received);return;}
   if(textPage) {
-    Task& t=view.tasks[selection[0]];bool c=String(t.id).startsWith("codex:");
-    box(10,76,300,125,UI_CARD,9);pill(c?"Codex":"Hermes",20,83,c?UI_CYAN:UI_GREEN,58);
-    label(labels[t.status],90,86,color(t.status));label(elapsed(t.started),239,86,UI_DIM);
+    Task& t=view.tasks[selection[0]];int agent=AgentSelection::index(t.source);uint16_t accent=agentColor(agent);
+    box(10,76,300,125,UI_CARD,9);pill(AgentSelection::label(agent),20,83,accent,90);
+    label(labels[t.status],118,86,color(t.status));label(elapsed(t.started),239,86,UI_DIM);
     wrap(t.title,20,111,280,2,UI_TEXT,16);
     label(fitted(t.action,276),20,154,UI_CYAN);
     wrap(t.summary,20,174,280,2,UI_DIM);
@@ -99,10 +99,10 @@ void taskPage() {
   }
   int first=(selection[0]/3)*3;
   for(int i=first;i<min(first+3,view.count);i++) {
-    Task& t=view.tasks[i];bool chosen=i==selection[0],c=String(t.id).startsWith("codex:");int y=76+(i-first)*42;
+    Task& t=view.tasks[i];bool chosen=i==selection[0];int agent=AgentSelection::index(t.source);uint16_t accent=agentColor(agent);int y=76+(i-first)*42;
     box(10,y,300,37,chosen?UI_SELECTED:UI_CARD,7);
-    if(chosen) box(10,y+8,3,21,c?UI_CYAN:UI_GREEN,1);
-    box(19,y+8,21,21,c?rgb(28,70,91):rgb(25,67,52),5);label(c?"C":"H",25,y+10,c?UI_CYAN:UI_GREEN,16);
+    if(chosen) box(10,y+8,3,21,accent,1);
+    box(19,y+8,21,21,UI_LINE,5);label(String(AgentSelection::label(agent)).substring(0,1),25,y+10,accent,16);
     label(fitted(t.title,252,16),48,y+3,UI_TEXT,16);
     label(labels[t.status],48,y+22,color(t.status));
     label(elapsed(t.started),222,y+22,UI_DIM);
@@ -121,7 +121,7 @@ void taskPage() {
 void approvalPage(uint32_t now) {
   if(!view.approvalCount) {emptyState("暂无待审批命令","请求出现后可批准一次或拒绝");return;}
   Approval& a=view.approvals[selection[1]];
-  pill(String(a.source)=="codex"?"Codex":"Hermes",10,41,UI_AMBER,62);
+  pill(AgentSelection::label(AgentSelection::index(a.source)),10,41,UI_AMBER,90);
   label(String(selection[1]+1)+" / "+view.approvalCount,268,44,UI_DIM);
   label(fitted(a.title,292,16),12,64,UI_TEXT,16);
   box(10,86,300,104,UI_CARD,8);box(10,95,3,85,UI_AMBER,1);
@@ -135,10 +135,11 @@ void approvalPage(uint32_t now) {
   }
 }
 void metricPage() {
-  Metric& m=view.metrics[metricSource];uint16_t accent=metricSource?UI_GREEN:UI_CYAN;
-  pill(metricSource?"Hermes":"Codex",10,41,accent,64);
-  label(metricMode?"套餐额度":"Token / 缓存",84,44,UI_TEXT);
-  label("B 切换来源",239,44,UI_DIM);
+  if(metricSource<0) {emptyState("没有已显示的来源","到来源页长按 C 选择显示",false);return;}
+  Metric& m=metricSource<3?view.metrics[metricSource]:unknownMetric;uint16_t accent=agentColor(metricSource);
+  pill(AgentSelection::label(metricSource),10,41,accent,92);
+  label(metricMode?"套餐额度":"Token / 缓存",111,44,UI_TEXT);
+  label("B 切换来源",238,44,UI_DIM);
   if(metricMode) {
     if(!m.quotaAvailable || !m.quotaCount) {emptyState("暂未提供套餐额度","此来源未返回额度数据",false);return;}
     for(int i=0;i<min(m.quotaCount,2);i++) {
@@ -176,16 +177,24 @@ void metricPage() {
   label(metricSource?"会话开始日归属":"账户日统计有更新延迟",85,111,UI_DIM);
 }
 void sourcePage() {
-  for(int i=0;i<2;i++) {
-    int y=43+i*69;uint16_t accent=i?UI_GREEN:UI_CYAN;
-    box(10,y,300,62,UI_CARD,9);dot(30,y+21,10,UI_SELECTED);label(i?"H":"C",25,y+13,accent,16);
-    label(i?"Hermes":"Codex",49,y+8,UI_TEXT,16);
-    bool online=view.online[i];dot(232,y+16,3,online?UI_GREEN:UI_RED);label(online?"在线":"离线",242,y+9,online?UI_GREEN:UI_RED);
-    label(view.live[i]?"实时同步":view.healthy[i]?"历史数据":"连接异常",49,y+29,accent);
-    label(fitted(view.detail[i][0]?String(view.detail[i]):String(i?"桌面 / CLI / Gateway":"本机 Desktop IPC / SQLite"),274),20,y+46,UI_DIM);
+  int detected[AgentSelection::COUNT],count=0,selected=0;
+  for(int i=0;i<AgentSelection::COUNT;i++) if(view.agents[i].detected) {if(i==sourceSelection) selected=count;detected[count++]=i;}
+  if(!count) {emptyState("尚未发现本机 Agent","安装或启动后自动检测",false);return;}
+  label("发现 "+String(count)+" 个来源",12,42,UI_DIM);
+  label("长按 C 显示 / 隐藏",166,42,UI_CYAN);
+  int first=(selected/3)*3;
+  for(int row=first;row<min(first+3,count);row++) {
+    int i=detected[row],y=62+(row-first)*39;SourceInfo& a=view.agents[i];bool chosen=i==sourceSelection,enabled=agentSelection.enabled(i);uint16_t accent=agentColor(i);
+    box(10,y,300,34,chosen?UI_SELECTED:UI_CARD,7);if(chosen) stroke(10,y,300,34,accent,7);
+    dot(23,y+17,4,enabled?accent:UI_LINE);label(AgentSelection::label(i),35,y+3,enabled?UI_TEXT:UI_DIM,16);
+    label(a.taskSupport?(a.live?"实时任务":a.healthy?"历史数据":"采集异常"):"仅进程在线检测",35,y+21,UI_DIM);
+    label(enabled?"显示":"隐藏",228,y+4,enabled?accent:UI_DIM);
+    dot(285,y+12,3,a.online?UI_GREEN:UI_RED);
+    label(a.online?"在线":"离线",266,y+20,a.online?UI_GREEN:UI_DIM);
   }
-  box(10,183,300,22,UI_SELECTED,6);wifiIcon(24,190,WiFi.status()==WL_CONNECTED?UI_CYAN:UI_RED);
-  label("Wi-Fi",40,187,UI_DIM);label(WiFi.localIP().toString(),184,187,UI_TEXT);
+  SourceInfo& chosen=view.agents[sourceSelection];
+  wrap(chosen.detail,12,181,292,1,UI_DIM);
+  label(String(selected+1)+" / "+count+" · B 选择来源",12,196,UI_DIM);
 }
 String byteRate(float n) {
   return n>=1048576?String(n/1048576,1)+"M/s":n>=1024?String(n/1024,1)+"K/s":String(n,0)+"B/s";
@@ -293,7 +302,7 @@ void drawScene(const String& message,bool stale,uint32_t now) {
   String status=toast?controlToast:message!="已连接"?message+" · "+(stale && view.received?String("数据已过期 ")+age:age):stale?"数据已过期 · "+age:"已同步 · "+age;
   label(fitted(status,294),12,211,toast?UI_AMBER:(stale || message!="已连接")?UI_RED:UI_DIM);
   if(page==Navigation::SETTINGS) {key("A","上一项",10);key("B",setting==4?"返回":"调整",113);key("C","下一项",218);}
-  else {key("A",page==1?"页/长按拒绝":"上一页",10);key("B",page==0?"任务/长设置":page==1?"请求/长设置":page==2?"来源/长设置":page==4?"资源/网络":"长按设置",113);key("C",page==0?"页/长按详情":page==1?"页/长按同意":page==2?(metricMode?"页/长按图表":"页/长按额度"):"下一页",218);}
+  else {key("A",page==1?"页/长按拒绝":"上一页",10);key("B",page==0?"任务/长设置":page==1?"请求/长设置":page==2?"来源/长设置":page==4?"资源/网络":page==3?"选择/长设置":"长按设置",113);key("C",page==0?"页/长按详情":page==1?"页/长按同意":page==2?(metricMode?"页/长按图表":"页/长按额度"):page==3?"页/长按显示":"下一页",218);}
 }
 void drawFrame(const String& message,bool stale,uint32_t now) {
   float t=constrain((now-transitionAt)/240.0f,0.0f,1.0f);sceneProgress=1-powf(1-t,3);
