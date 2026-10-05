@@ -1,0 +1,18 @@
+{
+  "device": "M5Stack Core 1, ESP32, no PSRAM",
+  "arduino": "2.0.16",
+  "observed_fault": {
+    "wifi": 3,
+    "rssi": -28,
+    "snapshot_http": -7,
+    "body_expected": 7678,
+    "body_received": 2872
+  },
+  "allocator_failure": {
+    "stage": "WiFiClientRxBuffer.fillBuffer malloc",
+    "requested_bytes": 1436,
+    "internal_heap_reported": 40448,
+    "largest_internal_block_reported": 38900
+  },
+  "interpretation": "EspClass statistics use MALLOC_CAP_INTERNAL and include word-only IRAM; byte-buffer malloc nevertheless failed. Release 25600 byte-addressable bytes by shrinking the RGB565 strip from 80 to 40 rows. Firmware now reports INTERNAL|8BIT heap statistics."
+}

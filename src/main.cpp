@@ -6,6 +6,7 @@
 #include <ArduinoJson.h>
 #include <esp_system.h>
 #include <esp_log.h>
+#include <esp_heap_caps.h>
 #include <ESPmDNS.h>
 #include <type_traits>
 #include "navigation.h"
@@ -150,6 +151,8 @@ bool readConfig(Config& c) {
   return c.ssid.length() && c.url.length() && c.token.length();
 }
 void setMessage(const String& value) { lock(); netMessage=value; unlock(); }
+uint32_t byteHeap() {return heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);}
+uint32_t minByteHeap() {return heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);}
 
 uint32_t bodyClock() {return millis();}
 void bodyYield() {vTaskDelay(pdMS_TO_TICKS(1));}
@@ -187,7 +190,7 @@ bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,Strin
     base="http://"+address.toString()+base.substring(hostEnd);
   }
   String url=base+"/api/v1/snapshot?view=active&source="+(source==1?"codex":source==2?"hermes":"all");
-  if(source==0) url+="&device="+String((uint32_t)ESP.getEfuseMac(),HEX)+"&uptime="+String(millis()/1000)+"&heap="+String(ESP.getFreeHeap())+"&min_heap="+String(ESP.getMinFreeHeap());
+  if(source==0) url+="&device="+String((uint32_t)ESP.getEfuseMac(),HEX)+"&uptime="+String(millis()/1000)+"&heap="+String(byteHeap())+"&min_heap="+String(minByteHeap());
   String enabled;for(int i=0;i<AgentSelection::COUNT;i++) if(!(hidden & (1U<<i))) {if(enabled.length()) enabled+=",";enabled+=AgentSelection::id(i);}
   url+="&agents="+(enabled.length()?enabled:String("none"));
   if(cursor.length()) url+="&cursor="+cursor;
@@ -196,7 +199,7 @@ bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,Strin
   http.addHeader("Authorization","Bearer "+cfg.token);
   int code=http.GET();lock();snapshotHttpCode=code;unlock();
   if(code!=200) {
-    error=code==401?"认证失败：检查 Token":code<0?"服务不可达 ("+String(code)+")":"服务错误 "+String(code);
+    error=code==401?"认证失败：检查 Token":code==-7?"HTTP 响应读取失败 (-7)":code==-8?"网络内存不足 (-8)":code<0?"服务不可达 ("+String(code)+")":"服务错误 "+String(code);
     transportFault=code<0;http.end();return false;
   }
   if(!readHttpJson(http,client,error,false)) {transportFault=error.startsWith("响应不完整");return false;}
@@ -496,13 +499,16 @@ void serialDiagnostics() {
     line.trim();
     if(line=="INFO") {
       lock();String message=netMessage;uint32_t received=cache[0].received;int total=cache[0].total;uint32_t stackFree=networkStackFree;unlock();
-      Serial.printf("INFO {\"uptime\":%lu,\"heap\":%u,\"min_heap\":%u,\"max_heap_block\":%u,\"network_stack_free\":%lu,\"wifi\":%d,\"ap\":%s,\"page\":%d,\"tasks\":%d,\"visible_tasks\":%d,\"events\":%d,\"host_samples\":%d,\"host_available\":%s,\"host_age_ms\":%lu,\"age_ms\":%lu,\"message\":\"%s\"}\n",millis()/1000,ESP.getFreeHeap(),ESP.getMinFreeHeap(),ESP.getMaxAllocHeap(),stackFree,WiFi.status(),apActive?"true":"false",page,total,view.count,view.eventCount,view.host.count,view.host.available?"true":"false",view.host.received?millis()-view.host.received:0,received?millis()-received:0,message.c_str());
+      Serial.printf("INFO {\"uptime\":%lu,\"heap\":%u,\"min_heap\":%u,\"max_heap_block\":%u,\"network_stack_free\":%lu,\"wifi\":%d,\"ap\":%s,\"page\":%d,\"tasks\":%d,\"visible_tasks\":%d,\"events\":%d,\"host_samples\":%d,\"host_available\":%s,\"host_age_ms\":%lu,\"age_ms\":%lu,\"message\":\"%s\"}\n",millis()/1000,byteHeap(),minByteHeap(),heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),stackFree,WiFi.status(),apActive?"true":"false",page,total,view.count,view.eventCount,view.host.count,view.host.available?"true":"false",view.host.received?millis()-view.host.received:0,received?millis()-received:0,message.c_str());
     } else if(line=="NET_INFO") {
       lock();int sc=snapshotHttpCode,hc=hostHttpCode;uint32_t rejoins=linkRecovery.rejoins;int failures=linkRecovery.failures;unlock();
       Serial.printf("NET {\"wifi\":%d,\"ip\":\"%s\",\"gateway\":\"%s\",\"rssi\":%d,\"snapshot_http\":%d,\"host_http\":%d,\"transport_failures\":%d,\"wifi_rejoins\":%lu}\n",WiFi.status(),WiFi.localIP().toString().c_str(),WiFi.gatewayIP().toString().c_str(),WiFi.RSSI(),sc,hc,failures,rejoins);
     } else if(line=="HTTP_DIAG") {
       lock();uint32_t sr=snapshotReads,hr=hostReads,se=snapshotReadErrors,he=hostReadErrors,expected=bodyExpected,received=bodyReceived;unlock();
       Serial.printf("HTTP {\"snapshot_reads\":%lu,\"host_reads\":%lu,\"snapshot_errors\":%lu,\"host_errors\":%lu,\"expected\":%lu,\"received\":%lu,\"json_capacity\":%u}\n",sr,hr,se,he,expected,received,networkJson.capacity());
+    } else if(line=="MEM_INFO") {
+      const uint32_t caps=MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT;
+      Serial.printf("MEM {\"byte_heap\":%u,\"min_byte_heap\":%u,\"max_byte_block\":%u,\"canvas_bytes\":%u}\n",heap_caps_get_free_size(caps),heap_caps_get_minimum_free_size(caps),heap_caps_get_largest_free_block(caps),canvasReady?320*STRIP_HEIGHT*2:0);
     } else if(line.startsWith("TAB ")) {changePage(line.substring(4).toInt());render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
     else if(line=="SETTINGS") {if(page!=Navigation::SETTINGS) toggleSettings();render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
     else if(line=="BACK") {if(page==Navigation::SETTINGS) leaveSettings();render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
@@ -539,9 +545,10 @@ void setup() {
   // Only our structured diagnostic replies use UART; errors remain on the LCD.
   Serial.println("AI Monitor boot v5 agents UI");
   M5.Display.setRotation(1);M5.Display.fillScreen(UI_BG);
-  // 51KB RGB565 strip, instead of a 154KB full-frame allocation on a non-PSRAM Core.
+  // Keep 25.6KB of byte-addressable RAM for TCP RX, Wi-Fi packets and speaker DMA.
+  // ESP.getFreeHeap() includes word-only IRAM, which cannot serve those buffers.
   canvas.setColorDepth(16);canvas.setPsram(false);
-  canvasReady=canvas.createSprite(320,80)!=nullptr;
+  canvasReady=canvas.createSprite(320,STRIP_HEIGHT)!=nullptr;
   prefs.begin("ai-monitor",false);
   agentSelection.hidden=prefs.getUShort("agentHidden",0);
   brightness=prefs.getUChar("brightness",128);muted=prefs.getBool("muted",false);

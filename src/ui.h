@@ -5,7 +5,9 @@ constexpr uint16_t rgb(int r,int g,int b) {return ((r>>3)<<11)|((g>>2)<<5)|(b>>3
 constexpr uint16_t UI_BG=rgb(9,17,28), UI_CARD=rgb(20,33,49), UI_SELECTED=rgb(26,48,65);
 constexpr uint16_t UI_TEXT=rgb(237,245,251), UI_DIM=rgb(147,167,187), UI_LINE=rgb(40,58,76);
 constexpr uint16_t UI_CYAN=rgb(63,205,239), UI_GREEN=rgb(74,222,157), UI_AMBER=rgb(255,194,88), UI_RED=rgb(255,108,119);
-uint32_t stripHashes[3]{};
+constexpr int STRIP_HEIGHT=40;
+static_assert(240%STRIP_HEIGHT==0,"LCD strips must cover the display exactly");
+uint32_t stripHashes[240/STRIP_HEIGHT]{};
 lgfx::LGFXBase* gfx=&M5.Display;
 int stripY=0, sceneX=0;
 float sceneProgress=1;
@@ -308,11 +310,11 @@ void drawFrame(const String& message,bool stale,uint32_t now) {
   float t=constrain((now-transitionAt)/240.0f,0.0f,1.0f);sceneProgress=1-powf(1-t,3);
   gfx=canvasReady?(lgfx::LGFXBase*)&canvas:(lgfx::LGFXBase*)&M5.Display;
   if(canvasReady) {
-    for(stripY=0;stripY<240;stripY+=80) {
+    for(stripY=0;stripY<240;stripY+=STRIP_HEIGHT) {
       canvas.fillScreen(UI_BG);drawScene(message,stale,now);
       const uint32_t* pixels=(const uint32_t*)canvas.getBuffer();uint32_t hash=2166136261UL;
-      for(int i=0;i<320*80/2;i++) hash=(hash^pixels[i])*16777619UL;
-      if(stripHashes[stripY/80]!=hash) {canvas.pushSprite(0,stripY);stripHashes[stripY/80]=hash;}
+      for(int i=0;i<320*STRIP_HEIGHT/2;i++) hash=(hash^pixels[i])*16777619UL;
+      if(stripHashes[stripY/STRIP_HEIGHT]!=hash) {canvas.pushSprite(0,stripY);stripHashes[stripY/STRIP_HEIGHT]=hash;}
     }
   } else {stripY=0;M5.Display.fillScreen(UI_BG);drawScene(message,stale,now);}
   gfx=&M5.Display;stripY=0;sceneX=0;

@@ -59,10 +59,11 @@ try:
     original=agents(serial)['hidden'];assert 'opencode' in agents(serial)['detected']
     command(serial,'TAB 3');time.sleep(.5);capture(serial,'v5-sources.png')
     select(serial,2)
-    # Ensure OpenCode hidden and check persistence through a USB reconnect/reset.
+    # Ensure OpenCode hidden; passive USB diagnostics must preserve device uptime.
     if not agents(serial)['hidden'] & 4:command(serial,'SOURCE_TOGGLE')
     hidden=agents(serial)['hidden'];before_reconnect=info(serial)['uptime'];serial.close();serial=connect();after_reconnect=healthy(serial)['uptime']
     print('NVS reconnect uptime',before_reconnect,'->',after_reconnect,flush=True)
+    assert after_reconnect>=before_reconnect,'diagnostic connection reset device'
     assert agents(serial)['hidden']==hidden,'NVS choice lost'
     command(serial,'TAB 2')
     for _ in range(4):

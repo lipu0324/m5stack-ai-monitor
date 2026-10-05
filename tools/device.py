@@ -4,8 +4,9 @@ import argparse
 import json
 import os
 import time
+import select
+import termios
 from pathlib import Path
-import serial
 from serial.tools import list_ports
 def default_port():
     configured = os.environ.get('AI_MONITOR_PORT')
@@ -20,11 +21,60 @@ def default_port():
 
 PORT = default_port()
 
+class PassiveSerial:
+    """POSIX UART access without toggling the ESP32's DTR/RTS reset pins."""
+    def __init__(self, port, timeout=2):
+        self.timeout=timeout
+        self.buffer=bytearray()
+        self.fd=os.open(port,os.O_RDWR|os.O_NOCTTY|os.O_NONBLOCK)
+        try:
+            settings=termios.tcgetattr(self.fd)
+            settings[0]=settings[1]=settings[3]=0
+            settings[2]=termios.CS8|termios.CREAD|termios.CLOCAL
+            settings[4]=settings[5]=termios.B115200
+            settings[6][termios.VMIN]=settings[6][termios.VTIME]=0
+            termios.tcsetattr(self.fd,termios.TCSANOW,settings)
+        except BaseException:
+            self.close()
+            raise
+
+    def _fill(self, deadline):
+        left=max(0,deadline-time.monotonic())
+        if not select.select([self.fd],[],[],left)[0]:return False
+        chunk=os.read(self.fd,65536)
+        self.buffer.extend(chunk)
+        return bool(chunk)
+
+    def read(self, size=1):
+        deadline=time.monotonic()+self.timeout
+        while len(self.buffer)<size and self._fill(deadline):pass
+        data=bytes(self.buffer[:size]);del self.buffer[:len(data)]
+        return data
+
+    def readline(self):
+        deadline=time.monotonic()+self.timeout
+        while b'\n' not in self.buffer and self._fill(deadline):pass
+        end=self.buffer.find(b'\n')+1 or len(self.buffer)
+        data=bytes(self.buffer[:end]);del self.buffer[:end]
+        return data
+
+    def write(self, data):
+        written=0;deadline=time.monotonic()+self.timeout
+        while written<len(data):
+            if not select.select([],[self.fd],[],max(0,deadline-time.monotonic()))[1]:
+                raise TimeoutError('serial write timed out')
+            written+=os.write(self.fd,data[written:])
+        return written
+
+    def close(self):
+        if self.fd is not None:os.close(self.fd);self.fd=None
+
+    def __enter__(self):return self
+    def __exit__(self,*args):self.close()
+
+
 def connect(port=PORT):
-    s=serial.Serial(port=None,baudrate=115200,timeout=2)
-    s.dtr=False;s.rts=False;s.port=port;s.open()
-    time.sleep(.2);s.reset_input_buffer()
-    return s
+    return PassiveSerial(port)
 
 def info(s):
     s.write(b'INFO\n');until=time.monotonic()+5

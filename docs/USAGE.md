@@ -23,7 +23,7 @@ Core 一代通过局域网 Wi-Fi 显示当前正在运行的 Codex/Hermes/OpenCo
 
 审批不会开启整会话或永久放行，不启动、停止或发送 AI 任务。命令过长、内容不完整、数据过期或不支持的请求需在电脑上处理。输入问题、文件变更和权限扩展审批暂不提供设备响应。审批操作通过独立网络任务执行，不阻塞按钮。完成一声、等待两声、失败三声，可在设置中静音。
 
-界面采用深色卡片、来源徽标、状态图标、带刻度的七日柱状图、缓存与额度进度条、按住审批的确认进度及切页动画。320×240 RGB565 画面通过 320×80 分块缓冲绘制（51,200 字节），仅推送变化的块；网络在另一任务执行。无需全屏大缓冲，保留 HTTP 与中文字体绘制所需的内存。
+界面采用深色卡片、来源徽标、状态图标、带刻度的七日柱状图、缓存与额度进度条、按住审批的确认进度及切页动画。320×240 RGB565 画面通过 320×40 分块缓冲绘制（25,600 字节），仅推送变化的块；网络在另一任务执行。相较先前的 80 行缓冲，释放 25,600 字节可供 TCP 接收、Wi-Fi 报文和声音 DMA 使用，画面色彩与布局保持一致。
 
 ## 数据的含义
 
@@ -89,16 +89,20 @@ Hermes 桌面连接只读取其本地桥接 Token，保留在主机内存中，�
 .venv/bin/python tools/device.py screen --output .private/device-screen.ppm
 ```
 
-USB 只读界面诊断支持 `TAB 0..4`、`SETTINGS`、`BACK`、`NEXT_SETTING`、`SELECT_BACK`、`DETAIL`、`METRIC`、`MODE`、`HOST_MODE`、`HTTP_DIAG`、`NET_INFO`、`AGENTS` 和 `PERF`，不触发审批决定。`PERF` 返回实际整帧绘制时间与分块缓冲启用情况。
+USB 只读界面诊断支持 `TAB 0..4`、`SETTINGS`、`BACK`、`NEXT_SETTING`、`SELECT_BACK`、`DETAIL`、`METRIC`、`MODE`、`HOST_MODE`、`HTTP_DIAG`、`NET_INFO`、`MEM_INFO`、`AGENTS` 和 `PERF`，不触发审批决定。`PERF` 返回实际整帧绘制时间与分块缓冲启用情况。
 
 SDK 调试日志已关闭，避免 Arduino 2.0.16 在长串口截图期间遇到网络错误时忙等 TX-idle 并触发看门狗；连接错误仍通过屏幕和 INFO 报告。
 
-INFO 含网络任务最低剩余栈 `network_stack_free`。部分串口驱动在打开连接时会重启设备，避免配网过程中反复打开诊断工具。
+INFO 含网络任务最低剩余栈 `network_stack_free`；`heap`、`min_heap`、`max_heap_block` 与发给服务的设备遥测，均按 `MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT` 统计。`MEM_INFO` 另外显示字节堆余量、最低余量、最大字节块与绘图缓冲大小。ESP32 的内部内存总数包括只能对齐读写 32 位数据的 IRAM，不能用它判断 HTTP、字符串或声音缓冲是否有余量。
+
+Linux 诊断工具使用 POSIX 串口，不切换 DTR/RTS，也不因打开诊断连接而复位设备，保留真实故障现场和 uptime。烧录工具仍会按需要复位。
 LCD 截图可能包含临时热点密码，应保存到私有目录。测试不替用户批准真实请求，也不额外发送模型消息。
 
 长时间观察工具 `tools/soak.py` 仅供手动诊断，本次八小时观察已按用户要求取消。短测结果与实机验证边界见 [验证记录](../VALIDATION.md)。
 
 响铃后 JSON 解析使用启动时预留的 32KB 堆缓冲并复用，避免播放声音后再申请大块内存。INFO 同时报告 `max_heap_block`，解析失败显示具体错误类型。
+
+可运行 `.venv/bin/python tools/check-byte-heap.py --seconds 180` 进行三分钟针对性复测：真实任务/主机双请求、测试音、图表切换和设置进出，检查正文完整性、uptime 连续性与字节内存余量；尊重静音设置，不发送 AI 消息或审批操作。
 
 ## 主机曲线的数据范围
 
