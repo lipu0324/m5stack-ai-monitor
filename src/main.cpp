@@ -112,6 +112,35 @@ bool canvasReady=false,canvasDoubleReady=false;
 uint32_t transitionAt=0, frameMicros=0, aPressedAt=0, cPressedAt=0;
 uint32_t paintMicros=0,pushMicros=0,transitionFrames=0,transitionWorstMicros=0;
 int transitionDirection=1;
+// Core1 IP5306 reports five coarse charge levels, not battery presence/health.
+int batteryLevel=-1,batteryCharging=-1;
+bool batteryDetected=false,batteryReadOK=false,batteryChargeReadOK=false;
+uint8_t batteryRaw=0,batteryInputRaw=0,batteryFullRaw=0;
+uint32_t batteryPolledAt=0;
+
+void pollBattery() {
+  batteryPolledAt=millis();
+  if(M5.Power.getType()!=m5::Power_Class::pmic_ip5306) return;
+  int oldLevel=batteryLevel,oldCharging=batteryCharging;bool oldDetected=batteryDetected;
+  batteryLevel=-1;batteryCharging=-1;batteryChargeReadOK=false;
+  batteryReadOK=M5.In_I2C.readRegister(0x75,0x78,&batteryRaw,1,400000);
+  if(batteryReadOK) {
+    batteryDetected=true;
+    switch(batteryRaw>>4) {
+      case 0x0:batteryLevel=100;break;
+      case 0x8:batteryLevel=75;break;
+      case 0xC:batteryLevel=50;break;
+      case 0xE:batteryLevel=25;break;
+      case 0xF:batteryLevel=0;break;
+      default:break; // Unknown register pattern is not an empty battery.
+    }
+    bool inputOK=M5.In_I2C.readRegister(0x75,0x70,&batteryInputRaw,1,400000);
+    bool fullOK=M5.In_I2C.readRegister(0x75,0x71,&batteryFullRaw,1,400000);
+    batteryChargeReadOK=inputOK && fullOK;
+    if(batteryChargeReadOK) batteryCharging=(batteryInputRaw&8) && !(batteryFullRaw&8);
+  }
+  if(oldLevel!=batteryLevel || oldCharging!=batteryCharging || oldDetected!=batteryDetected) dirty=true;
+}
 
 void lock() { xSemaphoreTake(guard, portMAX_DELAY); }
 void unlock() { xSemaphoreGive(guard); }
@@ -508,6 +537,9 @@ void serialDiagnostics() {
     if(line=="INFO") {
       lock();String message=netMessage;uint32_t received=cache[0].received;int total=cache[0].total;uint32_t stackFree=networkStackFree;unlock();
       Serial.printf("INFO {\"uptime\":%lu,\"heap\":%u,\"min_heap\":%u,\"max_heap_block\":%u,\"network_stack_free\":%lu,\"wifi\":%d,\"ap\":%s,\"page\":%d,\"tasks\":%d,\"visible_tasks\":%d,\"events\":%d,\"host_samples\":%d,\"host_available\":%s,\"host_age_ms\":%lu,\"age_ms\":%lu,\"message\":\"%s\"}\n",millis()/1000,byteHeap(),minByteHeap(),heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),stackFree,WiFi.status(),apActive?"true":"false",page,total,view.count,view.eventCount,view.host.count,view.host.available?"true":"false",view.host.received?millis()-view.host.received:0,received?millis()-received:0,message.c_str());
+    } else if(line=="POWER") {
+      pollBattery();
+      Serial.printf("POWER {\"pmic\":%d,\"detected\":%s,\"read_ok\":%s,\"level\":%d,\"raw_level\":%u,\"charge_read_ok\":%s,\"charging\":%d,\"input_flag\":%s,\"full_flag\":%s,\"voltage_supported\":false,\"presence_supported\":false}\n",(int)M5.Power.getType(),batteryDetected?"true":"false",batteryReadOK?"true":"false",batteryLevel,batteryRaw,batteryChargeReadOK?"true":"false",batteryCharging,batteryChargeReadOK && (batteryInputRaw&8)?"true":"false",batteryChargeReadOK && (batteryFullRaw&8)?"true":"false");
     } else if(line=="NET_INFO") {
       lock();int sc=snapshotHttpCode,hc=hostHttpCode;uint32_t rejoins=linkRecovery.rejoins;int failures=linkRecovery.failures;unlock();
       Serial.printf("NET {\"wifi\":%d,\"ip\":\"%s\",\"gateway\":\"%s\",\"rssi\":%d,\"snapshot_http\":%d,\"host_http\":%d,\"transport_failures\":%d,\"wifi_rejoins\":%lu}\n",WiFi.status(),WiFi.localIP().toString().c_str(),WiFi.gatewayIP().toString().c_str(),WiFi.RSSI(),sc,hc,failures,rejoins);
@@ -559,6 +591,7 @@ void setup() {
   canvasReady=canvas.createSprite(320,STRIP_HEIGHT)!=nullptr;
   canvasAlternate.setColorDepth(16);canvasAlternate.setPsram(false);
   canvasDoubleReady=canvasReady && canvasAlternate.createSprite(320,STRIP_HEIGHT)!=nullptr;
+  pollBattery();
   prefs.begin("ai-monitor",false);
   agentSelection.hidden=prefs.getUShort("agentHidden",0);
   brightness=prefs.getUChar("brightness",128);muted=prefs.getBool("muted",false);
@@ -603,6 +636,8 @@ void loop() {
   if(!M5.BtnA.isPressed() && !M5.BtnC.isPressed()) acSuppress=false;
   if(beepsRemaining>0 && (int32_t)(now-nextBeep)>=0) {M5.Speaker.tone(1800,100);beepsRemaining--;nextBeep=now+220;}
   bool animating=now-transitionAt<240 || sceneProgress<1;
+  // Poll only between transitions; the screen never performs I2C transactions.
+  if(!animating && now-batteryPolledAt>=5000) pollBattery();
   if(dirty || now-lastRender>=(animating?16U:50U)) {render();lastRender=now;}
   serialDiagnostics();delay(animating?1:5);
 }

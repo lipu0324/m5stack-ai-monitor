@@ -91,6 +91,16 @@ void wifiIcon(int x,int y,uint16_t c) {
   segment(x-4,y+5,x,y+3,c);segment(x,y+3,x+4,y+5,c);
   segment(x-8,y,x-3,y-3,c);segment(x-3,y-3,x+3,y-3,c);segment(x+3,y-3,x+8,y,c);
 }
+void batteryIndicator() {
+  if(!batteryDetected || !visible(211,14)) return;
+  uint16_t c=batteryLevel<0?UI_DIM:batteryLevel<=25?UI_AMBER:batteryCharging==1?UI_CYAN:UI_GREEN;
+  stroke(232,213,21,10,c,2);box(253,216,2,4,c);
+  if(batteryLevel>=0) {
+    for(int i=0;i<batteryLevel/25;i++) box(235+i*4,216,3,4,c);
+  } else label("?",239,211,UI_DIM);
+  if(batteryCharging==1) {segment(241,211,237,217,UI_TEXT);segment(237,217,244,217,UI_TEXT);segment(244,217,240,223,UI_TEXT);}
+  label(batteryLevel>=0?"约"+String(batteryLevel)+"%":String("--"),261,211,c);
+}
 void key(const String& letter,const String& action,int x,int width=98) {
   if(!visible(225,15)) return;
   box(x,225,16,13,UI_LINE,3);label(letter,x+4,225,UI_TEXT);label(action,x+21,225,UI_DIM);
@@ -328,7 +338,8 @@ void drawScene(const String& message,bool stale,uint32_t now) {
   bool toast=(int32_t)(controlToastUntil-now)>0;
   String age=view.received?String((now-view.received)/1000)+" 秒前":String("尚未同步");
   String status=toast?controlToast:message!="已连接"?message+" · "+(stale && view.received?String("数据已过期 ")+age:age):stale?"数据已过期 · "+age:"已同步 · "+age;
-  label(fitted(status,294),12,211,toast?UI_AMBER:(stale || message!="已连接")?UI_RED:UI_DIM);
+  label(fitted(status,batteryDetected?212:294),12,211,toast?UI_AMBER:(stale || message!="已连接")?UI_RED:UI_DIM);
+  batteryIndicator();
   if(page==Navigation::SETTINGS) {key("A","上一项",10);key("B",setting==4?"返回":"调整",113);key("C","下一项",218);}
   else {key("A",page==1?"页/长按拒绝":"上一页",10);key("B",page==0?"任务/长设置":page==1?"请求/长设置":page==2?"来源/长设置":page==4?"资源/网络":page==3?"选择/长设置":"长按设置",113);key("C",page==0?"页/长按详情":page==1?"页/长按同意":page==2?(metricMode?"页/长按图表":"页/长按额度"):page==3?"页/长按显示":"下一页",218);}
   }

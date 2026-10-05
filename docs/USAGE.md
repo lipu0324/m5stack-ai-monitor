@@ -91,7 +91,9 @@ Hermes 桌面连接只读取其本地桥接 Token，保留在主机内存中，�
 .venv/bin/python tools/device.py screen --output .private/device-screen.ppm
 ```
 
-USB 只读界面诊断支持 `TAB 0..4`、`SETTINGS`、`BACK`、`NEXT_SETTING`、`SELECT_BACK`、`DETAIL`、`METRIC`、`MODE`、`HOST_MODE`、`HTTP_DIAG`、`NET_INFO`、`MEM_INFO`、`AGENTS` 和 `PERF`，不触发审批决定。`PERF` 返回整帧耗时、排版绘制耗时、DMA 提交/等待耗时、双缓冲状态，以及当前切页的累计帧数和最慢帧。DMA 和绘制并行，所以计数不等同于总线传输时间。
+USB 只读界面诊断支持 `TAB 0..4`、`SETTINGS`、`BACK`、`NEXT_SETTING`、`SELECT_BACK`、`DETAIL`、`METRIC`、`MODE`、`HOST_MODE`、`HTTP_DIAG`、`NET_INFO`、`MEM_INFO`、`POWER`、`AGENTS` 和 `PERF`，不触发审批决定。`PERF` 返回整帧耗时、排版绘制耗时、DMA 提交/等待耗时、双缓冲状态，以及当前切页的累计帧数和最慢帧。DMA 和绘制并行，所以计数不等同于总线传输时间。
+
+Core 一代的电量显示依赖 I²C 地址 `0x75` 的 IP5306 电源芯片。每五秒读取一次；成功时底栏显示约 0/25/50/75/100% 及充电标记，失败时不显示不可信的百分比，未检测到芯片则隐藏指示。USB `POWER` 仅报告电源芯片寄存器读取和粗略档位，不修改供电设置。IP5306 不提供实际电池电压或可靠的电池存在检测；插着 USB 时，即使电池缺失也可能读到 100%，所以这个读数无法诊断电池底座是否坏了。拔掉 USB 会自动关机时，应检查电池、底座触点和供电连接。
 
 `.venv/bin/python tools/check-animation.py --verify` 先等待真实主机曲线加载，再循环测量五页。验证双缓冲启用，每次动画至少六帧、最慢帧小于 60ms，同时检查 uptime 连续与字节内存余量。`--cycles` 可指定 1–5 轮，默认两轮。性能脱敏样本见 `tests/fixtures/core-animation-probe.json`。
 
