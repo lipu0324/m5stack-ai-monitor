@@ -86,7 +86,7 @@ Hermes 桌面连接只读取其本地桥接 Token，保留在主机内存中，�
 .venv/bin/python tools/device.py screen --output .private/device-screen.ppm
 ```
 
-USB 只读界面诊断支持 `TAB 0..4`、`SETTINGS`、`BACK`、`NEXT_SETTING`、`SELECT_BACK`、`DETAIL`、`METRIC`、`MODE` 、`HOST_MODE` 和 `PERF`，不触发审批决定。`PERF` 返回实际整帧绘制时间与分块缓冲启用情况。
+USB 只读界面诊断支持 `TAB 0..4`、`SETTINGS`、`BACK`、`NEXT_SETTING`、`SELECT_BACK`、`DETAIL`、`METRIC`、`MODE`、`HOST_MODE`、`HTTP_DIAG` 和 `PERF`，不触发审批决定。`PERF` 返回实际整帧绘制时间与分块缓冲启用情况。
 
 SDK 调试日志已关闭，避免 Arduino 2.0.16 在长串口截图期间遇到网络错误时忙等 TX-idle 并触发看门狗；连接错误仍通过屏幕和 INFO 报告。
 
@@ -102,3 +102,9 @@ LCD 截图可能包含临时热点密码，应保存到私有目录。测试不�
 采集 Linux `/proc/stat`、`meminfo`、`uptime`、`loadavg` 和网卡计数，不采集进程命令行或文件内容。CPU 使用相邻总计数之差，guest 已计入 user/nice，不重复累加；idle 与 iowait 视为空闲。内存使用量为 MemTotal - MemAvailable，磁盘对应 `/`。默认按最低 metric 的 IPv4 默认路由选择网卡，可在私有 config.json 中用 `host_interface` 覆盖，不叠加虚拟网卡。网络单位为 B/s、KiB/s、MiB/s。
 
 历史只在服务内存中保留最近 60 点，每两秒采样一次，图表横轴显示最近两分钟。服务重启从新样本开始；主机重启或出口网卡变化会清空旧曲线。首次样本、计数重置或缺失网卡显示未知；采集失败保留上次值及原始时间并明确标记失败。
+
+## 响应不完整诊断
+
+固件不再使用 HTTPClient.getString() 分配整份正文，而是经有界接收器直接流式解析到预留 JSON arena。接收器按实际读取字节推进，先排空缓冲再判断断开；设置 2.5 秒无进展超时和 5 秒总正文期限，并让出网络任务 CPU。每次请求关闭连接，AI 与主机数据依次独立读取。完整 JSON 还需匹配 Content-Length，尾部仅允许空白；不完整数据不会替换最后有效快照。
+
+USB `HTTP_DIAG` 报告两种请求的读取次数、错误次数和最近正文 expected/received 字节数，不含 Token 或正文。`tools/check-http-recovery.py` 在播放三声测试音（遵循静音设置）后反复切换图表和设置，检查长度、数据时效与设备 uptime；仅做短测。

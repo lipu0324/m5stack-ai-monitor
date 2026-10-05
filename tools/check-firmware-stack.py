@@ -10,7 +10,7 @@ objdump = Path.home() / '.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-
 elf = root / '.pio/build/m5stack-core/firmware.elf'
 assembly = subprocess.check_output([str(objdump), '-d', '-C', str(elf)], text=True)
 frames = {}
-for function in ('fetch', 'resetSnapshot', 'networkWorker'):
+for function in ('fetch', 'readHttpJson', 'resetSnapshot', 'networkWorker'):
     match = re.search(
         rf'^[0-9a-f]+ <{function}\([^\n]+>:\n[^\n]*\bentry\s+a1,\s*(0x[0-9a-f]+|\d+)',
         assembly, re.MULTILINE,

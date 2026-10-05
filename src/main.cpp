@@ -9,6 +9,7 @@
 #include <ESPmDNS.h>
 #include <type_traits>
 #include "navigation.h"
+#include "response_reader.h"
 
 // Only the network worker touches HTTP; only loop() touches display, NVS and buttons.
 enum Status : uint8_t { IDLE, RUNNING, APPROVAL, WAIT_INPUT, DONE, FAILED, INTERRUPTED, UNKNOWN };
@@ -84,6 +85,8 @@ uint32_t acPressed=0, lastRender=0, lastButton=0, alertsSequence=0;
 bool alertsInitialized=false;
 int beepsRemaining=0; uint32_t nextBeep=0;
 uint32_t networkStackFree=0;
+uint32_t snapshotReads=0,hostReads=0,snapshotReadErrors=0,hostReadErrors=0;
+uint32_t bodyExpected=0,bodyReceived=0;
 String pendingApprovalId, pendingApprovalChoice, controlResult, controlToast;
 uint32_t controlToastUntil=0;
 bool controlPending=false;
@@ -137,6 +140,25 @@ bool readConfig(Config& c) {
 }
 void setMessage(const String& value) { lock(); netMessage=value; unlock(); }
 
+uint32_t bodyClock() {return millis();}
+void bodyYield() {vTaskDelay(pdMS_TO_TICKS(1));}
+bool readHttpJson(HTTPClient& http,WiFiClient& client,String& error,bool hostBody) {
+  const int length=http.getSize();
+  if(length<=0 || length>16384) {error="数据大小不兼容";http.end();client.stop();return false;}
+  ResponseReader<WiFiClient> body(client,length,bodyClock,bodyYield);
+  auto decodeError=deserializeJson(networkJson,body);
+  bool complete=!decodeError && body.finish();
+  lock();bodyExpected=length;bodyReceived=body.received;
+  if(hostBody) {hostReads++;if(!complete) hostReadErrors++;}
+  else {snapshotReads++;if(!complete) snapshotReadErrors++;}
+  unlock();http.end();client.stop();
+  if(complete) return true;
+  if(body.timedOut || decodeError==DeserializationError::IncompleteInput || (!decodeError && body.received<(size_t)length))
+    error="响应不完整 "+String(body.received)+"/"+String(length);
+  else error=decodeError?"数据解析失败: "+String(decodeError.c_str()):String("响应内容异常");
+  return false;
+}
+
 bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,String& error,bool includeHost) {
   WiFiClient client;
   HTTPClient http;
@@ -155,7 +177,7 @@ bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,Strin
   String url=base+"/api/v1/snapshot?view=active&source="+(source==1?"codex":source==2?"hermes":"all");
   if(source==0) url+="&device="+String((uint32_t)ESP.getEfuseMac(),HEX)+"&uptime="+String(millis()/1000)+"&heap="+String(ESP.getFreeHeap())+"&min_heap="+String(ESP.getMinFreeHeap());
   if(cursor.length()) url+="&cursor="+cursor;
-  http.setConnectTimeout(2000); http.setTimeout(2500);
+  http.setReuse(false);http.setConnectTimeout(2000); http.setTimeout(2500);
   if(!http.begin(client,url)) {error="服务地址无效";return false;}
   http.addHeader("Authorization","Bearer "+cfg.token);
   int code=http.GET();
@@ -163,13 +185,8 @@ bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,Strin
     error=code==401?"认证失败：检查 Token":code<0?"服务不可达":"服务错误 "+String(code);
     http.end();return false;
   }
-  int length=http.getSize();
-  if(length<=0 || length>16384) {error="数据大小不兼容";http.end();return false;}
-  String payload=http.getString();http.end();
-  if(payload.length()!=(size_t)length) {error="响应不完整";return false;}
+  if(!readHttpJson(http,client,error,false)) return false;
   auto& doc=networkJson;
-  auto decodeError=deserializeJson(doc,payload);
-  if(decodeError) {error="数据解析失败: "+String(decodeError.c_str());return false;}
   if(doc["version"].as<int>()!=1 || !doc["tasks"].is<JsonArray>() || !doc["events"].is<JsonArray>() || !doc["sources"].is<JsonObject>()) {
     error="数据格式不兼容";return false;
   }
@@ -218,13 +235,13 @@ bool fetch(const Config& cfg,int source,const String& cursor,Snapshot& out,Strin
   if(!includeHost) return true;
   if(!http.begin(client,base+"/api/v1/host")) return true;
   http.addHeader("Authorization","Bearer "+cfg.token);
-  code=http.GET();length=http.getSize();
+  code=http.GET();
   if(code==404) {
     out.host.received=millis();copyText(out.host.detail,"请更新本机监视服务");http.end();return true;
   }
-  if(code!=200 || length<=0 || length>16384) {http.end();return true;}
-  payload=http.getString();http.end();
-  if(payload.length()!=(size_t)length || deserializeJson(doc,payload) || doc["version"].as<int>()!=1) return true;
+  if(code!=200) {http.end();return true;}
+  String hostError;
+  if(!readHttpJson(http,client,hostError,true) || doc["version"].as<int>()!=1) return true;
   JsonObject h=doc["host"];
   if(!h.isNull()) {
     HostMetric& x=out.host;x.received=millis();x.observed=h["observed_at"]|0U;
@@ -442,6 +459,9 @@ void serialDiagnostics() {
     if(line=="INFO") {
       lock();String message=netMessage;uint32_t received=cache[0].received;int total=cache[0].total;uint32_t stackFree=networkStackFree;unlock();
       Serial.printf("INFO {\"uptime\":%lu,\"heap\":%u,\"min_heap\":%u,\"max_heap_block\":%u,\"network_stack_free\":%lu,\"wifi\":%d,\"ap\":%s,\"page\":%d,\"tasks\":%d,\"visible_tasks\":%d,\"events\":%d,\"host_samples\":%d,\"host_available\":%s,\"host_age_ms\":%lu,\"age_ms\":%lu,\"message\":\"%s\"}\n",millis()/1000,ESP.getFreeHeap(),ESP.getMinFreeHeap(),ESP.getMaxAllocHeap(),stackFree,WiFi.status(),apActive?"true":"false",page,total,view.count,view.eventCount,view.host.count,view.host.available?"true":"false",view.host.received?millis()-view.host.received:0,received?millis()-received:0,message.c_str());
+    } else if(line=="HTTP_DIAG") {
+      lock();uint32_t sr=snapshotReads,hr=hostReads,se=snapshotReadErrors,he=hostReadErrors,expected=bodyExpected,received=bodyReceived;unlock();
+      Serial.printf("HTTP {\"snapshot_reads\":%lu,\"host_reads\":%lu,\"snapshot_errors\":%lu,\"host_errors\":%lu,\"expected\":%lu,\"received\":%lu}\n",sr,hr,se,he,expected,received);
     } else if(line.startsWith("TAB ")) {changePage(line.substring(4).toInt());render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
     else if(line=="SETTINGS") {if(page!=Navigation::SETTINGS) toggleSettings();render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
     else if(line=="BACK") {if(page==Navigation::SETTINGS) leaveSettings();render();Serial.printf("UI page=%d setting=%d\n",page,setting);}
